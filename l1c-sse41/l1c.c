@@ -16,9 +16,9 @@ static const char file[]=__FILE__;
 	#define PROFILE_SIZE
 	#define LOUD			//size & time
 
-	#define ESTIMATE_SIZE		//DEBUG		checks for zero frequency, visualizes context usage
+//	#define ESTIMATE_SIZE		//DEBUG		checks for zero frequency, visualizes context usage
 	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
-	#define ANS_VAL			//DEBUG
+//	#define ANS_VAL			//DEBUG
 
 //	#define TEST_INTERLEAVE
 #endif
@@ -168,13 +168,14 @@ static void prof_print(ptrdiff_t usize)
 	srand((unsigned)__rdtsc());
 	colorgen(colors, prof_count, 64, 300, 100);
 	//colorgen0(colors, prof_count, 0xC0C0C0);
-	printf("1 char = 1 ms\n");
+	const int scale=5;
+	printf("1 char = %d ms\n", scale);
 	printf("|");
 	for(int k=0;k<prof_count;++k)
 	{
 		SpeedProfilerInfo *info=prof_data+k;
 		csum+=info->t;
-		int curr=(int)(csum*1000);//fixed scale
+		int curr=(int)(csum*1000/scale);//fixed scale
 		int space=curr-prev;
 		int len=0;
 		if(info->msg)
@@ -1674,12 +1675,12 @@ int l1_codec(int argc, char **argv)
 	int CDF2syms_size=(int)sizeof(int[3*NCTX<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses these as SIMD symbol info
 		CDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3*NCTX<<8]);
-	unsigned *CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m128i*));
+	unsigned *CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m128i));
 
 	int rCDF2syms_size=(int)sizeof(int[3<<PROBBITS]);
 	if(fwd)
 		rCDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3<<8]);
-	unsigned *rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m128i*));
+	unsigned *rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m128i));
 
 	psize=(int)sizeof(short[4*6*NCODERS])*(blockw+16);//4 padded rows  *  {Y*NCODERS, U*NCODERS, V*NCODERS,  eY*NCODERS, eU*NCODERS, eV*NCODERS} = 2*3*32 = 192 channels  ~48*iw bytes
 	pixels=(short*)_mm_malloc(psize, sizeof(__m128i));//~188 KB for 4K/12MP

@@ -170,13 +170,14 @@ static void prof_print(ptrdiff_t usize)
 	srand((unsigned)__rdtsc());
 	colorgen(colors, prof_count, 64, 300, 100);
 	//colorgen0(colors, prof_count, 0xC0C0C0);
-	printf("1 char = 1 ms\n");
+	const int scale=5;
+	printf("1 char = %d ms\n", scale);
 	printf("|");
 	for(int k=0;k<prof_count;++k)
 	{
 		SpeedProfilerInfo *info=prof_data+k;
 		csum+=info->t;
-		int curr=(int)(csum*1000);//fixed scale
+		int curr=(int)(csum*1000/scale);//fixed scale
 		int space=curr-prev;
 		int len=0;
 		if(info->msg)
