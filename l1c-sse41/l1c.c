@@ -23,17 +23,12 @@ static const char file[]=__FILE__;
 //	#define TEST_INTERLEAVE
 #endif
 
-//	#define COMMON_WEIGHTS
 	#define ENABLE_RCT_EXTENSION
-//	#define EMULATE_GATHER		//gather is a little faster
-	#define VNATIVE			//disables useless v-chroma scaling by 4
-//	#define NAIVEMIX		//3.5 3.8x slower	55 58 MB/s vs 196 224 MB/s
-//	#define WG_COMMONMIX		//bad
-	#define WG_ENABLE_eW		//eW is bad with blocks unlike in eBench
 	#define INTERLEAVESIMD		//2.5x faster interleave
 
 
-//#define NEAR_DISTORTION 7		//d >= 4
+#define ANALYSIS_XSTRIDE 2
+#define ANALYSIS_YSTRIDE 2
 
 #define DEFAULT_EFFORT_LEVEL 2
 #define L1_NPREDS1 4
@@ -1540,7 +1535,9 @@ int l1_codec(int argc, char **argv)
 			"Usage: \"%s\"  input  output  [Effort]  [Dist]    Encode/decode.\n"
 			"  Effort  =  0 CG / 1~3 L1 | 4 Profiler.\n"
 			"  Dist    =  lossy distortion. 4 <= Dist <= 16.\n"
+			"Built on %s %s\n"
 			, argv[0]
+			, __DATE__, __TIME__
 		);
 		return 1;
 	}
@@ -1715,11 +1712,11 @@ int l1_codec(int argc, char **argv)
 			__m128i wordmask=_mm_set_epi32(0, 0xFFFF, 0, 0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(int ky=0;ky<blockh;++ky)//analysis
+			for(int ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
 			{
 				__m128i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<ixbytes-3*NCODERS;kx+=3*NCODERS)
+				for(int kx=0;kx<ixbytes-3*NCODERS;kx+=3*NCODERS*ANALYSIS_XSTRIDE)
 				{
 					__m128i r0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8);
 					__m128i g0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8);
@@ -1730,7 +1727,7 @@ int l1_codec(int argc, char **argv)
 					r0=_mm_cvtepi8_epi16(r0);
 					g0=_mm_cvtepi8_epi16(g0);
 					b0=_mm_cvtepi8_epi16(b0);
-					imptr+=3*NCODERS;
+					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
 					r0=_mm_slli_epi16(r0, 2);
 					g0=_mm_slli_epi16(g0, 2);
 					b0=_mm_slli_epi16(b0, 2);
@@ -1811,6 +1808,7 @@ int l1_codec(int argc, char **argv)
 					);
 #endif
 				}
+				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 			for(int k=0;k<OCH_COUNT;++k)
 			{
