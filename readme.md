@@ -14,8 +14,9 @@ To build use GNU Make or create MSVC2022 CMake projects.
 ### Encoding
 `l1c.exe  input.ppm  output.l1c  [effort]`
 
-Where effort is {0, 1, 2, 3}. Higher effort should compress better but slower.
 Only 24-bit PPM images are supported.
+
+Effort = {0, 1, 2, 3}. Default is 2. Higher effort should compress better but slower.
 
 Effort levels 1 till 3 are for photographic content.
 
