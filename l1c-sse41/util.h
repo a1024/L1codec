@@ -212,6 +212,10 @@ extern "C"
 #define G_BUF_SIZE 4096
 extern char g_buf[G_BUF_SIZE];
 
+#if defined _MSC_VER && _MSC_VER < 1900
+int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap);
+int c99_snprintf(char *outBuf, size_t size, const char *format, ...);
+#endif
 void memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes);
 #define FILLMEM(PTR, DATA, ASIZE, ESIZE)\
 	do\
@@ -236,9 +240,9 @@ typedef enum GetOptRetEnum
 } GetOptRet;
 int acme_getopt(int argc, char **argv, int *start, const char **keywords, int kw_count);//keywords[i]: shortform char, followed by longform null-terminated string, returns 
 
-int hammingweight16(unsigned short x);
-int hammingweight32(unsigned x);
-int hammingweight64(unsigned long long x);
+//int hammingweight16(unsigned short x);
+//int hammingweight32(unsigned x);
+//int hammingweight64(unsigned long long x);
 int floor_log2_p1(unsigned long long n);
 int floor_log2(unsigned long long n);		//when _lzcnt_u64 is not available
 int floor_log2_32(unsigned n);			//when _lzcnt_u32 is not available
@@ -614,7 +618,9 @@ void prof_end(void *prof_ctx);
 //Color Printf
 #define COLORPRINTF_BK_DEFAULT 0x0C0C0C
 #define COLORPRINTF_TXT_DEFAULT 0xF2F2F2
+#if defined(_MSC_VER) && _MSC_VER >= 1900
 void colorprintf_init(void);//no initialization is needed as it's ON by default
+#endif
 int colorprintf(int textcolor, int bkcolor, const char *format, ...);//0x00BBGGRR
 void colorgen0(int *colors, int count, int maxbrightness);//maxbrightness is componentwise
 void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int maxtrials);//distance-based rejection sampling  O(N^2)  brightness range [0 ~ 765]

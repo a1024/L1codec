@@ -278,11 +278,12 @@ AWM_INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
 }
 AWM_INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
 {
+	int sym;
 #ifdef _DEBUG
 	if(!outbits)
 		LOG_ERROR("BitPacker outbits=0");
 #endif
-	int sym=ec->state&((1ULL<<outbits)-1);
+	sym=ec->state&((1ULL<<outbits)-1);
 
 	//pop outbits then renorm
 #ifdef ANS_VAL

@@ -16,5 +16,8 @@ LIBS += -lm
 endif
 
 
+l1c-clang:
+	clang $(FLAGS) -msse4.1  l1c.c main.c util.c  -o l1csse41 $(LIBS)
+
 l1c:
 	gcc $(FLAGS) -msse4.1  l1c.c main.c util.c  -o l1csse41 $(LIBS)

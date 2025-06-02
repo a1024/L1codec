@@ -35,6 +35,9 @@
 #include<Windows.h>//QueryPerformance...
 #include<conio.h>
 #include<psapi.h>
+#if defined _MSC_VER && _MSC_VER<1900
+#pragma comment(lib, "Psapi.lib")
+#endif
 #else
 #include<dirent.h>
 #include<sys/types.h>
@@ -58,7 +61,32 @@ typedef void *THREAD_RET;
 static const char file[]=__FILE__;
 
 char g_buf[G_BUF_SIZE]={0};
+#if defined(_MSC_VER) && _MSC_VER < 1900
+#define snprintf c99_snprintf
+#define vsnprintf c99_vsnprintf
+int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap)
+{
+	int count = -1;
 
+	if(size)
+		count=_vsnprintf_s(outBuf, size, _TRUNCATE, format, ap);
+	if (count==-1)
+		count=_vscprintf(format, ap);
+
+	return count;
+}
+int c99_snprintf(char *outBuf, size_t size, const char *format, ...)
+{
+	int count;
+	va_list ap;
+
+	va_start(ap, format);
+	count=c99_vsnprintf(outBuf, size, format, ap);
+	va_end(ap);
+
+	return count;
+}
+#endif
 void memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes)
 {
 	size_t copied;
@@ -154,8 +182,8 @@ void reverse16(void *start, void *end)
 #endif
 	while(p1<p2-1)
 	{
-		--p2;
 		unsigned short temp=*p1;
+		--p2;
 		*p1=*p2;
 		*p2=temp;
 		++p1;
@@ -296,7 +324,7 @@ int acme_getopt(int argc, char **argv, int *start, const char **keywords, int kw
 	}
 	return OPT_NOMATCH;
 }
-
+#if 0
 int hammingweight16(unsigned short x)
 {
 #ifdef _MSC_VER
@@ -321,14 +349,24 @@ int hammingweight64(unsigned long long x)
 	return __builtin_popcountll(x);
 #endif
 }
+#endif
 #if 1
 int floor_log2_p1(unsigned long long n)//when _lzcnt_u64 is not available
 {
 #ifdef _MSC_VER
-	unsigned long logn=0;
-	int success=_BitScanReverse64(&logn, n);
-	logn=success?logn+1:0;
-	return logn;
+	int logn;
+	unsigned hi=(unsigned)(n>>32);
+	if(hi)
+	{
+		_BitScanReverse((unsigned long*)&logn, hi);
+		return logn+32+1;
+	}
+	if(n)
+	{
+		_BitScanReverse((unsigned long*)&logn, (unsigned)n);
+		return logn+1;
+	}
+	return 0;
 #elif defined __GNUC__
 	int logn=64-__builtin_clzll(n);
 	return logn;
@@ -346,10 +384,19 @@ int floor_log2_p1(unsigned long long n)//when _lzcnt_u64 is not available
 int floor_log2(unsigned long long n)//when _lzcnt_u64 is not available
 {
 #if defined _MSC_VER || defined __GNUC__
-	unsigned long logn=0;
-	int success=_BitScanReverse64(&logn, n);
-	logn=success?logn:-1;
-	return logn;
+	int logn;
+	unsigned hi=(unsigned)(n>>32);
+	if(hi)
+	{
+		_BitScanReverse((unsigned long*)&logn, hi);
+		return logn+32;
+	}
+	if(n)
+	{
+		_BitScanReverse((unsigned long*)&logn, (unsigned)n);
+		return logn;
+	}
+	return -1;
 #else
 	int	logn=-!n;
 	int	sh=(n>=1ULL<<32)<<5;	logn+=sh, n>>=sh;
@@ -726,7 +773,8 @@ unsigned exp2_fix24_neg(unsigned x)
 #endif
 #if 1
 	unsigned long long result=0x1000000;
-	for(int k=0;k<FRAC_BITS;)//up to 24 muls
+	int k;
+	for(k=0;k<FRAC_BITS;)//up to 24 muls
 	{
 		int bit=x>>k&1;
 		++k;
@@ -903,11 +951,13 @@ unsigned long long exp2_fix24(int x)
 		0x16A09E668,//round(2^(0x800000*2^-24)*2^32)
 	};
 	int neg=x<0;
+	unsigned long long result;
+	int k;
 	x=abs(x);
 	if(x>=0x27000000)
 		return neg?0:0xFFFFFFFFFFFFFFFF;
-	unsigned long long result=0x1000000;
-	for(int k=0;k<FRAC_BITS;++k)//up to 24 muls
+	result=0x1000000;
+	for(k=0;k<FRAC_BITS;++k)//up to 24 muls
 	{
 		if(x&1)
 		{
@@ -927,19 +977,26 @@ int log2_fix24(unsigned long long x)
 	//and YouChad
 	if(!x)
 		return -((FRAC_BITS+1)<<FRAC_BITS);
-	int lgx=FLOOR_LOG2(x)-24;
-	x=SHIFT_RIGHT_SIGNED(x, lgx);
-	lgx<<=24;
-	if(!(x&(x-1)))//no need to do 24 muls if x is a power of two
-		return lgx;
-	for(int k=FRAC_BITS-1;k>=0;--k)//constant 24 muls, hopefully will be unrolled
 	{
-		x=x*x>>FRAC_BITS;
-		int cond=x>=(2LL<<FRAC_BITS);
-		x>>=cond;
-		lgx|=cond<<k;
+		int lgx=FLOOR_LOG2(x)-24;
+		x=SHIFT_RIGHT_SIGNED(x, lgx);
+		lgx<<=24;
+		if(!(x&(x-1)))//no need to do 24 muls if x is a power of two
+			return lgx;
+		{
+			int k;
+			for(k=FRAC_BITS-1;k>=0;--k)//constant 24 muls, hopefully will be unrolled
+			{
+				x=x*x>>FRAC_BITS;
+				{
+					int cond=x>=(2LL<<FRAC_BITS);
+					x>>=cond;
+					lgx|=cond<<k;
+				}
+			}
+		}
+		return lgx;
 	}
-	return lgx;
 }
 #undef  FRAC_BITS
 double power(double x, int y)
@@ -1099,8 +1156,9 @@ int print_timestamp(const char *format)
 }
 int print_bin8(int x)
 {
+	int k;
 	//printf("0b");
-	for(int k=7;k>=0;--k)
+	for(k=7;k>=0;--k)
 	{
 		int bit=x>>k&1;
 		printf("%c", '0'+bit);
@@ -1109,8 +1167,9 @@ int print_bin8(int x)
 }
 int print_bin32(unsigned x)
 {
+	int k;
 	//printf("0b");
-	for(int k=31;k>=0;--k)
+	for(k=31;k>=0;--k)
 	{
 		int bit=x>>k&1;
 		printf("%c", '0'+bit);
@@ -1119,7 +1178,8 @@ int print_bin32(unsigned x)
 }
 int print_binn(unsigned long long x, int nbits)
 {
-	for(int k=nbits-1;k>=0;--k)
+	int k;
+	for(k=nbits-1;k>=0;--k)
 	{
 		int bit=x>>k&1;
 		printf("%c", '0'+bit);
@@ -1164,14 +1224,14 @@ int print_size(double bytesize, int ndigits, int pdigits, char *str, int len)
 char first_error_msg[G_BUF_SIZE]={0}, latest_error_msg[G_BUF_SIZE]={0};
 int log_error(const char *fn, int line, int quit, const char *format, ...)
 {
-	int firsttime=first_error_msg[0]=='\0';
+	int firsttime=first_error_msg[0]=='\0', printed;
+	va_list args;
 
 	ptrdiff_t size=strlen(fn), start=size-1;
 	for(;start>=0&&fn[start]!='/'&&fn[start]!='\\';--start);
 	start+=start==-1||fn[start]=='/'||fn[start]=='\\';
 
-	int printed=sprintf_s(latest_error_msg, G_BUF_SIZE, "\n%s(%d): ", fn+start, line);
-	va_list args;
+	printed=sprintf_s(latest_error_msg, G_BUF_SIZE, "\n%s(%d): ", fn+start, line);
 	va_start(args, format);
 	printed+=vsprintf_s(latest_error_msg+printed, G_BUF_SIZE-printed-1, format, args);
 	va_end(args);
@@ -1281,7 +1341,8 @@ void array_clear(ArrayHandle *arr)//can be nullptr
 	{
 		if(arr[0]->destructor)
 		{
-			for(size_t k=0;k<arr[0]->count;++k)
+			size_t k;
+			for(k=0;k<arr[0]->count;++k)
 				arr[0]->destructor(array_at(arr, k));
 		}
 		arr[0]->count=0;
@@ -1291,7 +1352,8 @@ void array_free(ArrayHandle *arr)//can be nullptr
 {
 	if(*arr&&arr[0]->destructor)
 	{
-		for(size_t k=0;k<arr[0]->count;++k)
+		size_t k;
+		for(k=0;k<arr[0]->count;++k)
 			arr[0]->destructor(array_at(arr, k));
 	}
 	free(*arr);
@@ -1507,7 +1569,8 @@ void dlist_clear(DListHandle list)
 		{
 			if(list->destructor)
 			{
-				for(size_t k=0;k<list->objpernode;++k)
+				size_t k;
+				for(k=0;k<list->objpernode;++k)
 					list->destructor(it->data+k*list->objsize);
 				list->nobj-=list->objpernode;
 			}
@@ -1516,7 +1579,8 @@ void dlist_clear(DListHandle list)
 		}
 		if(list->destructor)
 		{
-			for(size_t k=0;k<list->nobj;++k)
+			size_t k;
+			for(k=0;k<list->nobj;++k)
 				list->destructor(it->data+k*list->objsize);
 		}
 		free(it);
@@ -1546,11 +1610,14 @@ size_t dlist_appendtoarray(DListHandle list, ArrayHandle *dst)
 	}
 	it=list->i;
 	payloadsize=list->objpernode*list->objsize;
-	for(size_t offset=dst[0]->count;it;)
 	{
-		memcpy(dst[0]->data+offset*list->objsize, it->data, payloadsize);
-		offset+=list->objpernode;
-		it=it->next;
+		size_t offset;
+		for(offset=dst[0]->count;it;)
+		{
+			memcpy(dst[0]->data+offset*list->objsize, it->data, payloadsize);
+			offset+=list->objpernode;
+			it=it->next;
+		}
 	}
 	dst[0]->count+=list->nobj;
 	return start;
@@ -1616,13 +1683,15 @@ void* dlist_push_back1(DListHandle list, const void *obj)
 	size_t obj_idx=list->nobj%list->objpernode;//index of next object
 	if(!obj_idx)//need a new node
 		dlist_append_node(list);
-	void *p=list->f->data+obj_idx*list->objsize;
-	if(obj)
-		memcpy(p, obj, list->objsize);
-	else
-		memset(p, 0, list->objsize);
-	++list->nobj;
-	return p;
+	{
+		void *p=list->f->data+obj_idx*list->objsize;
+		if(obj)
+			memcpy(p, obj, list->objsize);
+		else
+			memset(p, 0, list->objsize);
+		++list->nobj;
+		return p;
+	}
 }
 void* dlist_push_back(DListHandle list, const void *data, size_t count)
 {
@@ -2359,7 +2428,8 @@ BitstringHandle bitstring_construct(const void *src, size_t bitCount, size_t bit
 	if(src)
 	{
 		const unsigned char *srcbytes=(const unsigned char*)src;
-		for(size_t b=0;b<bitCount;++b)
+		size_t b;
+		for(b=0;b<bitCount;++b)
 		{
 			int bit=srcbytes[(bitOffset+b)>>3]>>((bitOffset+b)&7)&1;
 			str->data[b>>3]|=bit<<(b&7);
@@ -2397,7 +2467,8 @@ void bitstring_append(BitstringHandle *str, const void *src, size_t bitCount, si
 	if(src)
 	{
 		const unsigned char *srcbytes=(const unsigned char*)src;
-		for(size_t b=0;b<bitCount;++b)
+		size_t b;
+		for(b=0;b<bitCount;++b)
 		{
 			int bit=srcbytes[(bitOffset+b)>>3]>>((bitOffset+b)&7)&1;
 			str[0]->data[(str[0]->bitCount+b)>>3]|=bit<<((str[0]->bitCount+b)&7);
@@ -2438,7 +2509,8 @@ void bitstring_set(BitstringHandle *str, size_t bitIdx, int bit)
 }
 void bitstring_print(BitstringHandle str)
 {
-	for(int i=0;i<(int)str->bitCount;++i)
+	int i;
+	for(i=0;i<(int)str->bitCount;++i)
 		printf("%d", bitstring_get(&str, i));
 	//printf("\n");
 }
@@ -2516,8 +2588,11 @@ void        pqueue_buildheap(PQueueHandle *pq)
 		LOG_ERROR("Alloc error");
 		return;
 	}
-	for(ptrdiff_t i=pq[0]->count/2-1;i>=0;--i)
-		pqueue_heapifydown(pq, i, temp);
+	{
+		ptrdiff_t i;
+		for(i=pq[0]->count/2-1;i>=0;--i)
+			pqueue_heapifydown(pq, i, temp);
+	}
 	free(temp);
 }
 
@@ -2552,7 +2627,8 @@ void pqueue_free(PQueueHandle *pq)//can be nullptr
 {
 	if(*pq&&pq[0]->destructor)
 	{
-		for(size_t k=0;k<pq[0]->count;++k)
+		size_t k;
+		for(k=0;k<pq[0]->count;++k)
 			pq[0]->destructor(pq[0]->data+k*pq[0]->esize);
 	}
 	free(*pq);
@@ -2608,14 +2684,17 @@ void  pqueue_dequeue(PQueueHandle *pq)
 }
 void  pqueue_print(PQueueHandle *pq, void (*printer)(const void*))
 {
-	for(int k=0;k<(int)pq[0]->count;++k)
+	int k;
+	for(k=0;k<(int)pq[0]->count;++k)
 		printer(pq[0]->data+k*pq[0]->esize);
 }
 void  pqueue_print_heap(PQueueHandle *pq, void (*printer)(const void*))
 {
-	for(int x=1, start=0;start<(int)pq[0]->count;x<<=1)
+	int x, start;
+	for(x=1, start=0;start<(int)pq[0]->count;x<<=1)
 	{
-		for(int i=0;i<x&&start+i<(int)pq[0]->count;++i)
+		int i;
+		for(i=0;i<x&&start+i<(int)pq[0]->count;++i)
 			printer(pq[0]->data+(start+i)*pq[0]->esize);
 		printf("\n");
 		start+=x;
@@ -2664,10 +2743,13 @@ ArrayHandle filter_path(const char *path, int len)//replaces back slashes with s
 	if(len<0)
 		len=(int)strlen(path);
 	STR_COPY(path2, path, len);
-	for(ptrdiff_t k=0;k<(ptrdiff_t)path2->count;++k)//replace back slashes
 	{
-		if(path2->data[k]=='\\')
-			path2->data[k]='/';
+		ptrdiff_t k;
+		for(k=0;k<(ptrdiff_t)path2->count;++k)//replace back slashes
+		{
+			if(path2->data[k]=='\\')
+				path2->data[k]='/';
+		}
 	}
 	if(path2->data[path2->count-1]!='/')//ensure trailing slash
 		STR_APPEND(path2, "/", 1, 1);
@@ -2753,8 +2835,9 @@ ArrayHandle get_filenames(const char *path, const char **extensions, int extCoun
 		extension=get_extension(data.cFileName, len);
 		if(!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY))
 		{
+			int k;
 			found=0;
-			for(int k=0;k<extCount;++k)
+			for(k=0;k<extCount;++k)
 			{
 				if(!acme_stricmp(extension, extensions[k]))
 				{
@@ -2905,17 +2988,22 @@ ArrayHandle searchfor_file(const char *searchpath, const char *filetitle)
 	return filename;
 }
 
-int get_cpu_features(void)//returns  0: old CPU,  1: AVX2,  3: AVX-512
+int get_cpu_features(void)//returns  0: old system,  1: AVX2,  3: AVX-512
 {
 #ifdef _MSC_VER
+#if _MSC_VER >= 1900
 	int avx2=IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE)!=0;
 	int avx512=IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE)!=0;
+	return avx512<<1|avx2;
+#else
+	return 0;
+#endif
 #else
 	__builtin_cpu_init();
 	int avx2=__builtin_cpu_supports("avx2")!=0;
 	int avx512=__builtin_cpu_supports("avx512f")!=0;
-#endif
 	return avx512<<1|avx2;
+#endif
 }
 int query_cpu_cores(void)
 {
@@ -2931,7 +3019,7 @@ size_t query_mem_usage(void)
 {
 #ifdef _WIN32
 	PROCESS_MEMORY_COUNTERS_EX pmc={0};
-	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+	GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
 	return pmc.PrivateUsage;
 #else
 	FILE *file=fopen("/proc/self/status", "r");
@@ -2971,6 +3059,7 @@ static THREAD_RET THREAD_CALL thread_caller(void *param)
 void* mt_exec(void (*func)(void*), void *args, int argbytes, int nthreads)
 {
 	ArrayHandle handles;
+	int k;
 
 	ARRAY_ALLOC(ThreadParam, handles, 0, nthreads, 0, 0);
 	if(!handles)
@@ -2978,7 +3067,7 @@ void* mt_exec(void (*func)(void*), void *args, int argbytes, int nthreads)
 		LOG_ERROR("Alloc error");
 		return 0;
 	}
-	for(int k=0;k<nthreads;++k)
+	for(k=0;k<nthreads;++k)
 	{
 		ThreadParam *h;
 		int error;
@@ -3005,13 +3094,14 @@ void mt_finish(void *mt_ctx)
 	ArrayHandle handles=(ArrayHandle)mt_ctx;
 #ifdef _MSC_VER
 	ArrayHandle h2;
+	int k;
 	ARRAY_ALLOC(HANDLE, h2, 0, handles->count, 0, 0);
 	if(!h2)
 	{
 		LOG_ERROR("Alloc error");
 		return;
 	}
-	for(int k=0;k<(int)handles->count;++k)
+	for(k=0;k<(int)handles->count;++k)
 	{
 		ThreadParam *src;
 		HANDLE *dst;
@@ -3021,7 +3111,7 @@ void mt_finish(void *mt_ctx)
 		*dst=src->handle;
 	}
 	WaitForMultipleObjects((int)h2->count, (HANDLE*)h2->data, TRUE, INFINITE);
-	for(int k=0;k<(int)handles->count;++k)
+	for(k=0;k<(int)handles->count;++k)
 	{
 		HANDLE *h=(HANDLE*)array_at(&h2, k);
 		CloseHandle(*h);
@@ -3332,17 +3422,18 @@ void prof_end(void *prof_ctx)
 
 #endif
 
+#if defined(_MSC_VER) && _MSC_VER >= 1900
 void colorprintf_init(void)
 {
 #ifdef _WIN32
 	//https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences
 	HANDLE hOut=GetStdHandle(STD_OUTPUT_HANDLE);
+	DWORD dwMode=0;
 	if(hOut==INVALID_HANDLE_VALUE)
 	{
 		printf("ColorPrintf GetStdHandle() GetLastError %d\n", (int)GetLastError());
 		return;
 	}
-	DWORD dwMode=0;
 	if(!GetConsoleMode(hOut, &dwMode))
 	{
 		printf("ColorPrintf GetConsoleMode() GetLastError %d\n", (int)GetLastError());
@@ -3356,8 +3447,17 @@ void colorprintf_init(void)
 	}
 #endif
 }
+#endif
 int colorprintf(int textcolor, int bkcolor, const char *format, ...)//0x00BBGGRR
 {
+#if defined _MSC_VER && _MSC_VER < 1900
+	int printed;
+	va_list args;
+	va_start(args, format);
+	printed=vprintf(format, args);
+	va_end(args);
+	return printed;
+#else
 	int printed=0, msg=0;
 	va_list args;
 
@@ -3374,32 +3474,35 @@ int colorprintf(int textcolor, int bkcolor, const char *format, ...)//0x00BBGGRR
 	printf("%s", g_buf);
 
 	return msg;
+#endif
 }
 void colorgen0(int *colors, int count, int maxbrightness)
 {
+	int dmax0, k, k2;
 	unsigned char *limits=(unsigned char*)&maxbrightness;
 	unsigned char *data=(unsigned char*)colors, *ptr=data;
 	limits[0]+=!limits[0];
 	limits[1]+=!limits[1];
 	limits[2]+=!limits[2];
-	int dmax0=limits[0]*limits[0]+limits[1]*limits[1]+limits[2]*limits[2];
-	for(int k=0;k<count;++k)
+	dmax0=limits[0]*limits[0]+limits[1]*limits[1]+limits[2]*limits[2];
+	for(k=0;k<count;++k)
 	{
 		int reject=0, ntrials=0;
 		int bestdist=0, bestcolor=0;
 		do
 		{
+			int rem, dmin;
 			int r0=rand();
 			int r1=rand();
 			int r2=rand();
 			ptr[0]=(r0>>7)%limits[0];
 			ptr[1]=(r1>>7)%limits[1];
 			ptr[2]=(r2>>7)%limits[2];
-			int rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
-			int dmin=dmax0;
+			rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
+			dmin=dmax0;
 			{
 				const unsigned char *p2=(const unsigned char*)data;
-				for(int k2=0;k2<k;++k2)
+				for(k2=0;k2<k;++k2)
 				{
 					int dr=p2[0]-ptr[0];
 					int dg=p2[1]-ptr[1];
@@ -3424,13 +3527,14 @@ void colorgen0(int *colors, int count, int maxbrightness)
 }
 void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int maxtrials)
 {
+	int brightnessrange, dmax0, k;
 	unsigned char *data=(unsigned char*)colors;
 	CLAMP2(minbrightness, 0, 765-1);
 	if(maxbrightness<minbrightness+1)
 		maxbrightness=minbrightness+1;
-	int brightnessrange=maxbrightness-minbrightness;
-	int dmax0=brightnessrange*brightnessrange/3>>1;
-	for(int k=0;k<count;++k)
+	brightnessrange=maxbrightness-minbrightness;
+	dmax0=brightnessrange*brightnessrange/3>>1;
+	for(k=0;k<count;++k)
 	{
 		int reject=0, ntrials=0;
 		int bestdist=0, bestcolor=0;
@@ -3445,12 +3549,6 @@ void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int 
 			++ntrials;
 			if((unsigned)(r+g+b-minbrightness)>=(unsigned)brightnessrange)
 			{
-				if(ntrials<maxtrials)
-				{
-					reject=1;
-					continue;
-				}
-				r=g=b=(minbrightness+maxbrightness+3)/6;
 				static const char increments[]=
 				{
 					//r, g, b
@@ -3461,47 +3559,59 @@ void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int 
 					+0, +1, -1,
 					+0, -1, +1,
 				};
-				int t0=rand();
-				while(t0)
+				if(ntrials<maxtrials)
 				{
-					int rem=t0;
-					t0/=6;
-					rem-=t0*6;
-					const char *inc=increments+rem*3;
-					if(!(((r+inc[0])|(g+inc[1])|(b+inc[2]))>>8))
+					reject=1;
+					continue;
+				}
+				r=g=b=(minbrightness+maxbrightness+3)/6;
+				{
+					int t0=rand();
+					while(t0)
 					{
-						r+=inc[0];
-						g+=inc[1];
-						b+=inc[2];
+						const char *inc;
+						int rem=t0;
+						t0/=6;
+						rem-=t0*6;
+						inc=increments+rem*3;
+						if(!(((r+inc[0])|(g+inc[1])|(b+inc[2]))>>8))
+						{
+							r+=inc[0];
+							g+=inc[1];
+							b+=inc[2];
+						}
 					}
 				}
 			}
-			int rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
-			int dmin=0xFFFFFF;// > 3*255*255
 			{
-				const unsigned char *p2=(const unsigned char*)data;
-				for(int k2=0;k2<k;++k2)
+				int rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
+				int dmin=0xFFFFFF;// > 3*255*255
 				{
-					int dr=p2[0]-r;
-					int dg=p2[1]-g;
-					int db=p2[2]-b;
-					int d=dr*dr+dg*dg+db*db;
-					if(!k2||dmin>d)
-						dmin=d;
-					p2+=4;
+					int k2;
+					const unsigned char *p2=(const unsigned char*)data;
+					for(k2=0;k2<k;++k2)
+					{
+						int dr=p2[0]-r;
+						int dg=p2[1]-g;
+						int db=p2[2]-b;
+						int d=dr*dr+dg*dg+db*db;
+						if(!k2||dmin>d)
+							dmin=d;
+						p2+=4;
+					}
 				}
+				if(bestdist<dmin)
+				{
+					bestdist=dmin;
+					bestcolor=b<<16|g<<8|r;
+				}
+				reject=((unsigned long long)dmin<<21)<(unsigned long long)rem*dmax0;
+				if(ntrials>=maxtrials)
+					bestcolor=0x808080;
+				//	LOG_ERROR("%d trials reached, bestcolor %08X", maxtrials, bestcolor);
+				//if(!reject&&(unsigned)(r+g+b-minbrightness)>=(unsigned)brightnessrange)
+				//	LOG_ERROR("");
 			}
-			if(bestdist<dmin)
-			{
-				bestdist=dmin;
-				bestcolor=b<<16|g<<8|r;
-			}
-			reject=((unsigned long long)dmin<<21)<(unsigned long long)rem*dmax0;
-			if(ntrials>=maxtrials)
-				bestcolor=0x808080;
-			//	LOG_ERROR("%d trials reached, bestcolor %08X", maxtrials, bestcolor);
-			//if(!reject&&(unsigned)(r+g+b-minbrightness)>=(unsigned)brightnessrange)
-			//	LOG_ERROR("");
 		}while(reject&&ntrials<maxtrials);
 		colors[k]=bestcolor;
 	}
@@ -3541,11 +3651,13 @@ void get_tmpfn(char *dst)//dst is MAX_PATH
 		SYSTEMERROR("GetTempPath2A");
 		return;
 	}
-	int val=GetTempFileNameA(path, "", 0, dst);
-	if(!val)
 	{
-		SYSTEMERROR("GetTempFileNameA");
-		return;
+		int val=GetTempFileNameA(path, "", 0, dst);
+		if(!val)
+		{
+			SYSTEMERROR("GetTempFileNameA");
+			return;
+		}
 	}
 	file_delete(dst);
 #endif
@@ -3553,6 +3665,8 @@ void get_tmpfn(char *dst)//dst is MAX_PATH
 
 void exec_process(char *cmd, const char *currdir, int loud, double *elapsed, long long *maxmem)
 {
+	double t;
+	int suspendcount;
 	int success;
 	STARTUPINFOA si={0};
 	PROCESS_INFORMATION pi={0};
@@ -3585,8 +3699,8 @@ void exec_process(char *cmd, const char *currdir, int loud, double *elapsed, lon
 		SYSTEMERROR("CreateProcessA");
 		return;
 	}
-	double t=time_sec();
-	int suspendcount=ResumeThread(pi.hThread);
+	t=time_sec();
+	suspendcount=ResumeThread(pi.hThread);
 	if(suspendcount==(DWORD)-1)
 	{
 		SYSTEMERROR("CreateProcessA");

@@ -7,12 +7,17 @@
 #include<string.h>
 #include<math.h>
 #include<emmintrin.h>
+#ifdef _MSC_VER
+#include<intrin.h>
+#else
+#include<x86intrin.h>
+#endif
 static const char file[]=__FILE__;
 
 
 	#define PROFILE_TIME		//should be on
 
-#ifdef _MSC_VER
+#ifdef _DEBUG
 	#define PROFILE_SIZE
 	#define LOUD			//size & time
 
@@ -20,7 +25,7 @@ static const char file[]=__FILE__;
 	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
 //	#define ANS_VAL			//DEBUG
 
-	#define PRINT_SHIFTBOUNDS
+//	#define PRINT_SHIFTBOUNDS
 //	#define TEST_INTERLEAVE
 #endif
 
@@ -94,7 +99,7 @@ static void profile_size(const unsigned char *dstbwdptr, const char *msg, ...)
 	{
 		ptrdiff_t diff=prev-dstbwdptr;
 		size+=diff;
-		printf("%10td (%+10td) bytes", size, diff);
+		printf("%10d (%+10d) bytes", (int)size, (int)diff);
 		if(msg)
 		{
 			va_list args;
@@ -138,7 +143,7 @@ static void prof_checkpoint(ptrdiff_t size, const char *msg)
 		//double delta=t2-t;
 		//printf("%16.12lf sec", delta);
 		//if(size)
-		//	printf(" %12.6lf MB/s %10td bytes", size/(delta*1024*1024), size);
+		//	printf(" %12.6lf MB/s %10d bytes", size/(delta*1024*1024), (int)size);
 		//if(msg)
 		//	printf(" %s", msg);
 		//printf("\n");
@@ -149,31 +154,33 @@ static void prof_print(ptrdiff_t usize)
 {
 	static char buf[2048]={0};
 	double timesum=0, tmax=0;
-	for(int k=0;k<prof_count;++k)
+	int k;
+	int prev=0;
+	double csum=0;
+	int colors[128]={0};
+	const int scale=5;
+
+	for(k=0;k<prof_count;++k)
 	{
 		double t=prof_data[k].t;
 		timesum+=t;
 		if(tmax<t)
 			tmax=t;
 	}
-	int printed=0;
-	int prev=0;
-	double csum=0;
-	//printf("| ");
-	int colors[128]={0};
 	srand((unsigned)__rdtsc());
 	colorgen(colors, prof_count, 64, 300, 100);
 	//colorgen0(colors, prof_count, 0xC0C0C0);
-	const int scale=5;
 	printf("1 char = %d ms\n", scale);
 	printf("|");
-	for(int k=0;k<prof_count;++k)
+	for(k=0;k<prof_count;++k)
 	{
+		int curr, space, len;
+
 		SpeedProfilerInfo *info=prof_data+k;
 		csum+=info->t;
-		int curr=(int)(csum*1000/scale);//fixed scale
-		int space=curr-prev;
-		int len=0;
+		curr=(int)(csum*1000/scale);//fixed scale
+		space=curr-prev;
+		len=0;
 		if(info->msg)
 			len=(int)strlen(info->msg);
 		if(space>2047)//printf("%*s", HUGE, ""); CRASHES
@@ -201,10 +208,9 @@ static void prof_print(ptrdiff_t usize)
 		//	colorprintf(COLORPRINTF_TXT_DEFAULT, colors[k], "%*s", space, "");
 		printf("|");
 		prev=curr;
-		printed+=space+2+(k<prof_count-1);
 	}
 	printf("\n");
-	for(int k=0;k<prof_count;++k)
+	for(k=0;k<prof_count;++k)
 	{
 		SpeedProfilerInfo *info=prof_data+k;
 		//int nstars=(int)(info->t/tmax*64+0.5);
@@ -212,7 +218,7 @@ static void prof_print(ptrdiff_t usize)
 		printf("%16.7lf ms %8.4lf%% ", info->t*1000, 100.*info->t/timesum);
 	//	printf("  %c: %16.12lf sec %8.4lf%% ", k+'A', info->t, info->t/timesum);
 		if(info->size)
-			printf(" %16.6lf MB/s %10td bytes ", info->size/(info->t*1024*1024), info->size);
+			printf(" %16.6lf MB/s %10d bytes ", info->size/(info->t*1024*1024), (int)info->size);
 		if(info->msg)
 			colorprintf(COLORPRINTF_TXT_DEFAULT, colors[k], "%-20s", info->msg);
 		else// if(nstars)
@@ -453,28 +459,28 @@ typedef struct _rANS_SIMD_SymInfo	//16 bytes/level	4KB/ctx = 1<<12 bytes
 } rANS_SIMD_SymInfo;
 static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, unsigned long long *ctxmask, int ctxidx)
 {
-	int sum=0, count=0;
-	for(int ks=0;ks<256;++ks)
+	int sum=0, count=0, ks, rare;
+	for(ks=0;ks<256;++ks)
 	{
 		int freq=hist[ks];
 		sum+=freq;
 		count+=freq!=0;
 	}
-	int rare=sum<12*256/8;
+	rare=sum<12*256/8;
 	*ctxmask|=(unsigned long long)rare<<ctxidx;
 #ifdef ESTIMATE_SIZE
 	int count0=count, sum0=sum;
 #endif
 	if(rare)
 	{
-		for(int ks=0;ks<256;++ks)//bypass
+		for(ks=0;ks<256;++ks)//bypass
 			hist[ks]=1;
 		sum=256;
 		count=256;
 	}
 	else if(count==1)//disallow degenerate distribution
 	{
-		for(int ks=0;ks<256;++ks)
+		for(ks=0;ks<256;++ks)
 		{
 			int freq=hist[ks];
 			if(freq==(1<<PROBBITS))
@@ -489,20 +495,23 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, unsigned long 
 		}
 		count=2;
 	}
-	int sum2=0;
-	for(int ks=0, ks2=0;ks<256;++ks)//absent symbols get zero freqs
 	{
-		int freq=hist[ks];
-		hist[ks]=(int)(sum2*((1ULL<<PROBBITS)-count)/sum)+ks2;
-		ks2+=freq!=0;
-		sum2+=freq;
+		int sum2, ks2;
+
+		for(ks=0, ks2=0, sum2=0;ks<256;++ks)//absent symbols get zero freqs
+		{
+			int freq=hist[ks];
+			hist[ks]=(int)(sum2*((1ULL<<PROBBITS)-count)/sum)+ks2;
+			ks2+=freq!=0;
+			sum2+=freq;
+		}
+		//for(ks=0, sum2=0;ks<256;++ks)//never allows zero freqs	INEFFICIENT
+		//{
+		//	int freq=hist[ks];
+		//	hist[ks]=(int)(sum2*((1ULL<<PROBBITS)-256)/sum)+ks;
+		//	sum2+=freq;
+		//}
 	}
-	//for(int ks=0;ks<256;++ks)//never allows zero freqs	INEFFICIENT
-	//{
-	//	int freq=hist[ks];
-	//	hist[ks]=(int)(sum2*((1ULL<<PROBBITS)-256)/sum)+ks;
-	//	sum2+=freq;
-	//}
 #ifdef ESTIMATE_SIZE
 	double e=sum0;
 	if(count==count0)
@@ -596,123 +605,138 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, unsigned long 
 	}
 #endif
 #endif
-	int next=1<<PROBBITS;
-	for(int ks=255;ks>=0;--ks)
 	{
-		rANS_SIMD_SymInfo *info=syminfo+ks;
-		int curr=hist[ks];
-		int freq=next-curr;
-		next=curr;
-		hist[ks]=freq;
-		info->smax=(freq<<(RANS_STATE_BITS-PROBBITS))-1;//rescale freq to match the rANS state, and decrement to use _mm_cmpgt_epi32 instead of '>='
-		info->cdf=curr;
-		info->negf=(1<<PROBBITS)-freq;
-		//encoding:  state  =  q<<16|(cdf+r)
-		//div-free:  state  =  q*M+cdf+state-q*freq  =  state+q*(M-freq)+cdf  =  state+(state*invf>>sh)*(M-freq)+cdf
-		//sh = FLOOR_LOG2(freq)+32
-		//invf = ceil(2^sh/freq)		state is 31 bits
-		if(freq<2)
+		int next=1<<PROBBITS;
+		for(ks=255;ks>=0;--ks)
 		{
-			//freq=1
-			//ideally  q = state*inv(1)>>sh(1) = state*2^32>>32
-			//here  q' = state*(2^32-1)>>32 = floor(state-state/2^32) = state-1  if  1 <= x < 2^32
-			//enc  state = (state/1)*M+cdf+state%1  =  state+q*(M-1)+cdf
-			//but  q' = state-1
-			//so  state = state+(state-1+1)*(M-1)+cdf  =  state+q'*(M-1)+(cdf+M-1)
-			info->sh=0;
-			info->invf=0xFFFFFFFF;
-			info->cdf+=(1<<PROBBITS)-1;
-		}
-		else
-		{
-			info->sh=FLOOR_LOG2(freq);//eg: x/2 = x*0x80000000>>32>>0
-			unsigned long long inv=((0x100000000ULL<<info->sh)+freq-1)/freq;
-			info->invf=(unsigned)inv;
-			if(inv>0xFFFFFFFF)
+			rANS_SIMD_SymInfo *info=syminfo+ks;
+			int curr=hist[ks];
+			int freq=next-curr;
+			next=curr;
+			hist[ks]=freq;
+			info->smax=(freq<<(RANS_STATE_BITS-PROBBITS))-1;//rescale freq to match the rANS state, and decrement to use _mm_cmpgt_epi32 instead of '>='
+			info->cdf=curr;
+			info->negf=(1<<PROBBITS)-freq;
+			//encoding:  state  =  q<<16|(cdf+r)
+			//div-free:  state  =  q*M+cdf+state-q*freq  =  state+q*(M-freq)+cdf  =  state+(state*invf>>sh)*(M-freq)+cdf
+			//sh = FLOOR_LOG2(freq)+32
+			//invf = ceil(2^sh/freq)		state is 31 bits
+			if(freq<2)
 			{
-				--info->sh;
-				info->invf=(unsigned)(inv>>1);
+				//freq=1
+				//ideally  q = state*inv(1)>>sh(1) = state*2^32>>32
+				//here  q' = state*(2^32-1)>>32 = floor(state-state/2^32) = state-1  if  1 <= x < 2^32
+				//enc  state = (state/1)*M+cdf+state%1  =  state+q*(M-1)+cdf
+				//but  q' = state-1
+				//so  state = state+(state-1+1)*(M-1)+cdf  =  state+q'*(M-1)+(cdf+M-1)
+				info->sh=0;
+				info->invf=0xFFFFFFFF;
+				info->cdf+=(1<<PROBBITS)-1;
 			}
-		}
+			else
+			{
+				unsigned long long inv;
+
+				info->sh=FLOOR_LOG2(freq);//eg: x/2 = x*0x80000000>>32>>0
+				inv=((0x100000000ULL<<info->sh)+freq-1)/freq;
+				info->invf=(unsigned)inv;
+				if(inv>0xFFFFFFFF)
+				{
+					--info->sh;
+					info->invf=(unsigned)(inv>>1);
+				}
+			}
 #ifdef PRINT_SHIFTBOUNDS
-		if(minsh>info->sh)
-			minsh=info->sh;
-		if(maxsh<info->sh)
-			maxsh=info->sh;
+			if(minsh>info->sh)
+				minsh=info->sh;
+			if(maxsh<info->sh)
+				maxsh=info->sh;
 #endif
-		info->sh=1<<(PROBBITS-1-info->sh);
+			info->sh=1<<(PROBBITS-1-info->sh);
+		}
 	}
 }
 static void enc_packhist(BitPackerLIFO *ec, const int *hist, unsigned long long ctxmask, int ctxidx)//histogram must be normalized to PROBBITS, with spike at 128
 {
+	unsigned short CDF[257];
+	int ks;
+
 	if(ctxmask>>ctxidx&1)
 		return;
-	int sum=0;
-	unsigned short CDF[257];
-	for(int ks=0;ks<256;++ks)//integrage to zigzag CDF to be packed backwards
 	{
-		int sym=((ks>>1^-(ks&1))+128)&255;
-		int freq=hist[sym];
-		CDF[ks]=sum;//separate buffer for faster access in 2nd loop
-		sum+=freq;
-	}
-	CDF[256]=1<<PROBBITS;
-	
-	int cdfW=CDF[0];
-	int CDFlevels=1<<PROBBITS;
-	int startsym=0;
-	for(int ks=1;ks<=256;++ks)//push GR.k
-	{
-		int next=CDF[ks], freq=next-cdfW;
-		int nbypass=FLOOR_LOG2(CDFlevels);
-		if(ks>1)
-			nbypass-=7;
-		if(nbypass<0)
-			nbypass=0;
-		CDF[ks]=nbypass<<PROBBITS|freq;
-		cdfW=next;
-		CDFlevels-=freq;
-		startsym=ks;
-		if(!CDFlevels)
-			break;
-	}
-	for(int ks=startsym;ks>0;--ks)//encode GR
-	{
-		int freq=CDF[ks], nbypass=freq>>PROBBITS;
-		freq&=(1<<PROBBITS)-1;
-		int nzeros=freq>>nbypass, bypass=freq&((1<<nbypass)-1);
-		if(nbypass)
-			bitpacker_enc(ec, nbypass, bypass);
-		bitpacker_enc(ec, 1, 1);
-		while(nzeros)
+		int sum=0;
+		for(ks=0;ks<256;++ks)//integrage to zigzag CDF to be packed backwards
 		{
-			bitpacker_enc(ec, 1, 0);
-			--nzeros;
+			int sym=((ks>>1^-(ks&1))+128)&255;
+			int freq=hist[sym];
+			CDF[ks]=sum;//separate buffer for faster access in 2nd loop
+			sum+=freq;
 		}
+		CDF[256]=1<<PROBBITS;
+	}
+	{
+		int cdfW=CDF[0];
+		int CDFlevels=1<<PROBBITS;
+		int startsym=0;
+		for(ks=1;ks<=256;++ks)//push GR.k
+		{
+			int next=CDF[ks], freq=next-cdfW;
+			int nbypass=FLOOR_LOG2(CDFlevels);
+			if(ks>1)
+				nbypass-=7;
+			if(nbypass<0)
+				nbypass=0;
+			CDF[ks]=nbypass<<PROBBITS|freq;
+			cdfW=next;
+			CDFlevels-=freq;
+			startsym=ks;
+			if(!CDFlevels)
+				break;
+		}
+		for(ks=startsym;ks>0;--ks)//encode GR
+		{
+			int freq, nbypass, nzeros, bypass;
+
+			freq=CDF[ks];
+			nbypass=freq>>PROBBITS;
+			freq&=(1<<PROBBITS)-1;
+			nzeros=freq>>nbypass, bypass=freq&((1<<nbypass)-1);
+			if(nbypass)
+				bitpacker_enc(ec, nbypass, bypass);
+			bitpacker_enc(ec, 1, 1);
+			while(nzeros)
+			{
+				bitpacker_enc(ec, 1, 0);
+				--nzeros;
+			}
 #ifdef ANS_VAL
-		ansval_push(&ks, sizeof(ks), 1);
+			ansval_push(&ks, sizeof(ks), 1);
 #endif
+		}
 	}
 }
 static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long long ctxmask, int ctxidx)
 {
 	unsigned short hist[257];
+	int ks;
+
 	if(ctxmask>>ctxidx&1)//rare context
 	{
-		for(int ks=0;ks<256;++ks)//bypass
+		for(ks=0;ks<256;++ks)//bypass
 			hist[ks]=(1<<PROBBITS)/256;
 	}
 	else
 	{
 		unsigned short CDF[257]={0};
 		int CDFlevels=1<<PROBBITS;
-		int cdfW=0;
 		CDF[0]=0;
-		for(int ks=0;ks<256;++ks)//decode GR
+		for(ks=0;ks<256;++ks)//decode GR
 		{
-			int freq=-1;//stop bit doesn't count
-			int nbypass=FLOOR_LOG2(CDFlevels);
-			int ks2=ks+1;
+			int freq, nbypass, ks2, bit;
+
+			freq=-1;//stop bit doesn't count
+			nbypass=FLOOR_LOG2(CDFlevels);
+			ks2=ks+1;
 			if(ks2>1)
 				nbypass-=7;
 			if(nbypass<0)
@@ -720,7 +744,7 @@ static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long l
 #ifdef ANS_VAL
 			ansval_check(&ks2, sizeof(ks2), 1);
 #endif
-			int bit=0;
+			bit=0;
 			do
 			{
 				bit=bitpacker_dec(ec, 1);
@@ -729,7 +753,6 @@ static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long l
 			if(nbypass)
 				freq=freq<<nbypass|bitpacker_dec(ec, nbypass);
 
-			cdfW+=freq;
 			CDF[ks]=freq;
 			CDFlevels-=freq;
 			if(CDFlevels<=0)
@@ -743,25 +766,31 @@ static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long l
 		}
 		if(CDFlevels)
 			LOG_ERROR("CDF unpack error");
-		for(int ks=0;ks<256;++ks)//undo zigzag
+		for(ks=0;ks<256;++ks)//undo zigzag
 		{
 			int sym=((ks>>1^-(ks&1))+128)&255;
 			hist[sym]=CDF[ks];
 		}
 	}
-	int sum=0;
-	for(int ks=0;ks<256;++ks)//integrate
 	{
-		int freq=hist[ks];
-		hist[ks]=sum;
-		sum+=freq;
+		int sum=0;
+		for(ks=0;ks<256;++ks)//integrate
+		{
+			int freq=hist[ks];
+			hist[ks]=sum;
+			sum+=freq;
+		}
 	}
 	hist[256]=1<<PROBBITS;
-	for(int ks=0;ks<256;++ks)//CDF2sym contains {freq, (state&0xFFF)-cdf, sym}
+	for(ks=0;ks<256;++ks)//CDF2sym contains {freq, (state&0xFFF)-cdf, sym}
 	{
-		int cdf=hist[ks], next=hist[ks+1], freq=next-cdf;
-		int val=(freq<<PROBBITS|0)<<8|ks;
-		for(int ks2=cdf;ks2<next;++ks2, val+=1<<8)
+		int cdf, next, freq, val, ks2;
+
+		cdf=hist[ks];
+		next=hist[ks+1];
+		freq=next-cdf;
+		val=(freq<<PROBBITS|0)<<8|ks;
+		for(ks2=cdf;ks2<next;++ks2, val+=1<<8)
 			CDF2sym[ks2]=val;
 	}
 }
@@ -1044,18 +1073,20 @@ static void interleave_blocks_fwd(const unsigned char *original, int iw, int ih,
 	int blockxbytes=3*NCODERS*ixyblockw;
 #ifdef INTERLEAVESIMD
 	int SIMDxcount=blockxbytes&~((int)sizeof(__m128i[NCODERS])-1);
-	__m128i slowinc=_mm_set_epi32(0, sizeof(__m128i), 0, sizeof(__m128i));
+	__m128i slowinc=sizeof(void*)==8?_mm_set_epi32(0, sizeof(__m128i), 0, sizeof(__m128i)):_mm_set1_epi32(sizeof(__m128i));
 #endif
 	unsigned char *fastptr=interleaved;
 	ALIGN(32) const unsigned char *slowptrs[NCODERS]={0}, *slowptrs0[NCODERS]={0};
-	for(int ky=0;ky<YCODERS;++ky)//spread slow pointers
+	int kx, ky;
+
+	for(ky=0;ky<YCODERS;++ky)//spread slow pointers
 	{
-		for(int kx=0;kx<XCODERS;++kx)
+		for(kx=0;kx<XCODERS;++kx)
 			slowptrs0[XCODERS*ky+kx]=original+3*(iw*ixyblockh*ky+ixyblockw*kx);
 	}
-	for(int ky=0;ky<ixyblockh;++ky)//interleave
+	for(ky=0;ky<ixyblockh;++ky)//interleave
 	{
-		int kx=0;
+		kx=0;
 		memcpy((void*)slowptrs, slowptrs0, sizeof(slowptrs));
 #ifdef INTERLEAVESIMD
 		for(;kx<SIMDxcount;kx+=(int)sizeof(__m128i[NCODERS]))
@@ -1118,6 +1149,7 @@ static void interleave_blocks_fwd(const unsigned char *original, int iw, int ih,
 			_mm_store_si128((__m128i*)fastptr+0xF, block[0xF]);
 
 			fastptr+=sizeof(__m128i[NCODERS]);
+			if(sizeof(void*)==8)
 			{
 				__m128i mp[4];
 				mp[0]=_mm_add_epi64(slowinc, _mm_load_si128((__m128i*)slowptrs+0));
@@ -1136,6 +1168,18 @@ static void interleave_blocks_fwd(const unsigned char *original, int iw, int ih,
 				_mm_store_si128((__m128i*)slowptrs+1+4, mp[1]);
 				_mm_store_si128((__m128i*)slowptrs+2+4, mp[2]);
 				_mm_store_si128((__m128i*)slowptrs+3+4, mp[3]);
+			}
+			else
+			{
+				__m128i mp[4];
+				mp[0]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+0));
+				mp[1]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+1));
+				mp[2]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+2));
+				mp[3]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+3));
+				_mm_store_si128((__m128i*)slowptrs+0, mp[0]);
+				_mm_store_si128((__m128i*)slowptrs+1, mp[1]);
+				_mm_store_si128((__m128i*)slowptrs+2, mp[2]);
+				_mm_store_si128((__m128i*)slowptrs+3, mp[3]);
 			}
 		}
 #endif
@@ -1183,8 +1227,11 @@ static void interleave_blocks_fwd(const unsigned char *original, int iw, int ih,
 //				*fastptr++=*slowptrs[k]++;
 		}
 #endif
-		for(int k=0;k<NCODERS;++k)
-			slowptrs0[k]+=rowstride;
+		{
+			int k;
+			for(k=0;k<NCODERS;++k)
+				slowptrs0[k]+=rowstride;
+		}
 	}
 }
 static void interleave_blocks_inv(const unsigned char *interleaved, int iw, int ih, unsigned char *original)
@@ -1201,18 +1248,20 @@ static void interleave_blocks_inv(const unsigned char *interleaved, int iw, int 
 	int blockxbytes=3*NCODERS*ixyblockw;
 #ifdef INTERLEAVESIMD
 	int SIMDxcount=blockxbytes&~((int)sizeof(__m128i[NCODERS])-1);
-	__m128i slowinc=_mm_set_epi32(0, sizeof(__m128i), 0, sizeof(__m128i));
+	__m128i slowinc=sizeof(void*)==8?_mm_set_epi32(0, sizeof(__m128i), 0, sizeof(__m128i)):_mm_set1_epi32(sizeof(__m128i));
 #endif
 	const unsigned char *fastptr=interleaved;
 	ALIGN(32) unsigned char *slowptrs[NCODERS]={0}, *slowptrs0[NCODERS]={0};
-	for(int ky=0;ky<YCODERS;++ky)//spread slow pointers
+	int kx, ky;
+
+	for(ky=0;ky<YCODERS;++ky)//spread slow pointers
 	{
-		for(int kx=0;kx<XCODERS;++kx)
+		for(kx=0;kx<XCODERS;++kx)
 			slowptrs0[XCODERS*ky+kx]=original+3*(iw*ixyblockh*ky+ixyblockw*kx);
 	}
-	for(int ky=0;ky<ixyblockh;++ky)//interleave
+	for(ky=0;ky<ixyblockh;++ky)//interleave
 	{
-		int kx=0;
+		kx=0;
 		memcpy((void*)slowptrs, slowptrs0, sizeof(slowptrs));
 #ifdef INTERLEAVESIMD
 		for(;kx<SIMDxcount;kx+=(int)sizeof(__m128i[NCODERS]))
@@ -1275,6 +1324,7 @@ static void interleave_blocks_inv(const unsigned char *interleaved, int iw, int 
 			_mm_storeu_si128((__m128i*)slowptrs[0x0F], block[0xF]);
 
 			fastptr+=sizeof(__m128i[NCODERS]);
+			if(sizeof(void*)==8)
 			{
 				__m128i mp[4];
 				mp[0]=_mm_add_epi64(slowinc, _mm_load_si128((__m128i*)slowptrs+0));
@@ -1293,6 +1343,18 @@ static void interleave_blocks_inv(const unsigned char *interleaved, int iw, int 
 				_mm_store_si128((__m128i*)slowptrs+1+4, mp[1]);
 				_mm_store_si128((__m128i*)slowptrs+2+4, mp[2]);
 				_mm_store_si128((__m128i*)slowptrs+3+4, mp[3]);
+			}
+			else
+			{
+				__m128i mp[4];
+				mp[0]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+0));
+				mp[1]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+1));
+				mp[2]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+2));
+				mp[3]=_mm_add_epi32(slowinc, _mm_load_si128((__m128i*)slowptrs+3));
+				_mm_store_si128((__m128i*)slowptrs+0, mp[0]);
+				_mm_store_si128((__m128i*)slowptrs+1, mp[1]);
+				_mm_store_si128((__m128i*)slowptrs+2, mp[2]);
+				_mm_store_si128((__m128i*)slowptrs+3, mp[3]);
 			}
 		}
 #endif
@@ -1340,8 +1402,11 @@ static void interleave_blocks_inv(const unsigned char *interleaved, int iw, int 
 //				*slowptrs[k]++=*fastptr++;
 		}
 #endif
-		for(int k=0;k<NCODERS;++k)
-			slowptrs0[k]+=rowstride;
+		{
+			int k;
+			for(k=0;k<NCODERS;++k)
+				slowptrs0[k]+=rowstride;
+		}
 	}
 }
 static void save_ppm(const char *fn, const unsigned char *image, int iw, int ih)
@@ -1368,7 +1433,8 @@ static void decorr1d(unsigned char *data, int count, int bytestride, int bestrct
 
 	unsigned char *ptr=data;
 	int prevy=0, prevu=0, prevv=0, offset=0;
-	for(int k=0;k<count;++k)
+	int k, vpred;
+	for(k=0;k<count;++k)
 	{
 		int y=ptr[yidx]-128;
 		int u=ptr[uidx]-128;
@@ -1386,7 +1452,7 @@ static void decorr1d(unsigned char *data, int count, int bytestride, int bestrct
 		prevu=u-offset;
 
 		offset=vc0*y+vc1*u;
-		int vpred=(prevv+offset)>>2;
+		vpred=(prevv+offset)>>2;
 		CLAMP2(vpred, -128, 127);
 		ptr[2]=sym=(unsigned char)(v-vpred+128);
 		++rhist[256*2+sym];
@@ -1400,7 +1466,8 @@ static void encode1d(unsigned char *data, int count, int bytestride, unsigned *p
 	unsigned state=*pstate;
 	unsigned char *ptr=data+(count-(ptrdiff_t)1)*bytestride;
 	const rANS_SIMD_SymInfo *info=0;
-	for(int k=0;k<count;++k)
+	int k;
+	for(k=0;k<count;++k)
 	{
 		info=rsyminfo+ptr[2]+256*2;
 		if(state>info->smax)
@@ -1471,7 +1538,8 @@ static void decode1d(unsigned char *data, int count, int bytestride, int bestrct
 	unsigned char *ptr=data;
 	int prevy=0, prevu=0, prevv=0, offset=0;
 	int y=0, u=0, v=0;
-	for(int k=0;k<count;++k)
+	int k, vpred;
+	for(k=0;k<count;++k)
 	{
 		unsigned info;
 
@@ -1514,7 +1582,7 @@ static void decode1d(unsigned char *data, int count, int bytestride, int bestrct
 		}
 
 		offset=vc0*y+vc1*u;
-		int vpred=(prevv+offset)>>2;
+		vpred=(prevv+offset)>>2;
 		CLAMP2(vpred, -128, 127);
 		info=rCDF2syms[2<<PROBBITS|(state&((1<<PROBBITS)-1))];
 		v=(char)(info+vpred-128);
@@ -1542,6 +1610,60 @@ static void decode1d(unsigned char *data, int count, int bytestride, int bestrct
 }
 int l1_codec(int argc, char **argv)
 {
+	const char *srcfn, *dstfn;
+	int effort, dist;
+#ifdef ESTIMATE_SIZE
+	double esize[3*NCODERS]={0};
+#endif
+#ifdef LOUD
+	double t=time_sec();
+#endif
+	int fwd=0, iw=0, ih=0, rowstride=0;
+	ptrdiff_t usize=0, cap=0;
+	unsigned char *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
+	int psize=0;
+	short *pixels=0;
+	ptrdiff_t cheadersize=0, csize=0;
+	int blockw, blockh;
+	int qxbytes;//iw/XCODERS*XCODERS*3
+	int ixcount, ixbytes;//ix = interleaved circular buffer width		iw/XCODERS*NCODERS
+	int xremw, yremh;
+	int xrembytes;
+	ptrdiff_t isize;
+	ptrdiff_t interleavedsize;//fwd ? interleave residuals & context : pack residuals
+	unsigned char *interleaved=0;
+	int bestrct=0, npreds=0, sh=0;
+	unsigned long long ctxmask=0;//3*NCTX+3 = 54 flags	0: rare context (bypass)  1: emit stats
+	const int hsize=(int)sizeof(int[3*NCTX<<8]);//3 channels
+	int *hists=0;//fwd-only
+	const int rhsize=(int)sizeof(int[3*256]);
+	int *rhist=0;
+	int CDF2syms_size=0;
+	unsigned *CDF2syms=0;
+	int rCDF2syms_size;
+	unsigned *rCDF2syms=0;
+	int L1statesize=0;
+	int *L1state=0;
+	const unsigned char *combination=0;
+	int yidx, uidx, vidx;
+	__m128i uhelpmask, vc0, vc1;
+	int paddedwidth;
+	__m128i mctxmax=_mm_set1_epi16(NCTX-1);
+	__m128i mctxuoffset=_mm_set1_epi16(NCTX);
+	__m128i mctxvoffset=_mm_set1_epi16(NCTX*2);
+	__m128i amin=_mm_set1_epi16(-128);
+	__m128i amax=_mm_set1_epi16(127);
+	__m128i half8=_mm_set1_epi8(-128);
+	__m128i bytemask=_mm_set1_epi16(255);
+	__m128i wordmask=_mm_set1_epi32(0xFFFF);
+	__m128i myuv[6];//y y u u v v
+	__m128i dist_rcp=_mm_set1_epi16(0x7FFF), mdist=_mm_set1_epi16(1);
+	unsigned char *ctxptr=0;
+	__m128i mstate[4];
+	__m128i *L1preds=0;
+	int *L1weights=0;
+	int kx, ky;
+
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
 		printf(
@@ -1554,70 +1676,60 @@ int l1_codec(int argc, char **argv)
 		);
 		return 1;
 	}
-	const char *srcfn=argv[1], *dstfn=argv[2];
-	int effort=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
+	srcfn=argv[1];
+	dstfn=argv[2];
+	effort=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]);
+	dist=argc<5?1:atoi(argv[4]);
 	if(dist>1)
 		CLAMP2(dist, 4, 16);
-#ifdef ESTIMATE_SIZE
-	double esize[3*NCODERS]={0};
-#endif
-#ifdef LOUD
-	ptrdiff_t usize2=get_filesize(srcfn);
-	double t=time_sec();
-#endif
 	prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		LOG_ERROR("Codec requires both source and destination filenames");
 		return 1;
 	}
-	int fwd=0, iw=0, ih=0, rowstride=0;
-	ptrdiff_t usize=0, cap=0;
-	unsigned char *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
-	int psize=0;
-	short *pixels=0;
-	ptrdiff_t cheadersize=0, csize=0;
 	{
+		int c=0;
 		FILE *fsrc=fopen(srcfn, "rb");
 		if(!fsrc)
 		{
 			LOG_ERROR("Cannot open \"%s\"", srcfn);
 			return 1;
 		}
-		int tag=0;
-		fread(&tag, 1, 2, fsrc);
-		fwd=tag==('P'|'6'<<8);
-		if(!fwd&&tag!=('3'|'2'<<8))
+		fread(&c, 1, 2, fsrc);
+		fwd=c==('P'|'6'<<8);
+		if(!fwd&&c!=('3'|'2'<<8))
 		{
 			LOG_ERROR("Unsupported file \"%s\"", srcfn);
 			return 1;
 		}
 		if(fwd)
 		{
+			int nread, vmax;
 #ifdef LOUD
 			print_timestamp("%Y-%m-%d_%H%M%S\n");
 #endif
-			int temp=fgetc(fsrc);
-			if(temp!='\n')
+			c=fgetc(fsrc);
+			if(c!='\n')
 			{
 				LOG_ERROR("Invalid PPM file");
 				return 1;
 			}
-			int nread=fscanf(fsrc, "%d %d", &iw, &ih);
+			nread=fscanf(fsrc, "%d %d", &iw, &ih);
 			if(nread!=2)
 			{
 				LOG_ERROR("Unsupported PPM file");
 				return 1;
 			}
-			int vmax=0;
+			vmax=0;
 			nread=fscanf(fsrc, "%d", &vmax);
 			if(nread!=1||vmax!=255)
 			{
 				LOG_ERROR("Unsupported PPM file");
 				return 1;
 			}
-			temp=fgetc(fsrc);
-			if(temp!='\n')
+			c=fgetc(fsrc);
+			if(c!='\n')
 			{
 				LOG_ERROR("Invalid PPM file");
 				return 1;
@@ -1659,38 +1771,37 @@ int l1_codec(int argc, char **argv)
 		fclose(fsrc);
 	}
 	prof_checkpoint(fwd?usize:csize, "fread");
-	int blockw=iw/XCODERS;
-	int blockh=ih/YCODERS;
-	int qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
-	int ixcount=blockw*NCODERS, ixbytes=3*ixcount;//ix = interleaved circular buffer width		iw/XCODERS*NCODERS
-	int xremw=iw-blockw*XCODERS, yremh=ih-blockh*YCODERS;
-	int xrembytes=3*xremw;
-	ptrdiff_t isize=(ptrdiff_t)ixbytes*blockh;
-	ptrdiff_t interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
-	unsigned char *interleaved=(unsigned char*)_mm_malloc(interleavedsize, sizeof(__m128i));
+	blockw=iw/XCODERS;
+	blockh=ih/YCODERS;
+	qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
+	ixcount=blockw*NCODERS;
+	ixbytes=3*ixcount;//ix = interleaved circular buffer width		iw/XCODERS*NCODERS
+	xremw=iw-blockw*XCODERS;
+	yremh=ih-blockh*YCODERS;
+	xrembytes=3*xremw;
+	isize=(ptrdiff_t)ixbytes*blockh;
+	interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
+	interleaved=(unsigned char*)_mm_malloc(interleavedsize, sizeof(__m128i));
 	if(!interleaved)
 	{
 		LOG_ERROR("Alloc error");
 		return 1;
 	}
 	(void)xrembytes;
-	int bestrct=0, npreds=0, sh=0;
-	//int L1sh=0;
-	unsigned long long ctxmask=0;//3*NCTX+3 = 54 flags	0: rare context (bypass)  1: emit stats
-	const int hsize=(int)sizeof(int[3*NCTX<<8]);//3 channels
-	int *hists=fwd?(int*)malloc(hsize):0;//fwd-only
-	const int rhsize=(int)sizeof(int[3*256]);
-	int *rhist=fwd?(int*)malloc(rhsize):0;
+	bestrct=0, npreds=0, sh=0;
+	ctxmask=0;//3*NCTX+3 = 54 flags	0: rare context (bypass)  1: emit stats
+	hists=fwd?(int*)malloc(hsize):0;//fwd-only
+	rhist=fwd?(int*)malloc(rhsize):0;
 
-	int CDF2syms_size=(int)sizeof(int[3*NCTX<<PROBBITS]);
+	CDF2syms_size=(int)sizeof(int[3*NCTX<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses these as SIMD symbol info
 		CDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3*NCTX<<8]);
-	unsigned *CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m128i));
+	CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m128i));
 
-	int rCDF2syms_size=(int)sizeof(int[3<<PROBBITS]);
+	rCDF2syms_size=(int)sizeof(int[3<<PROBBITS]);
 	if(fwd)
 		rCDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3<<8]);
-	unsigned *rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m128i));
+	rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m128i));
 
 	psize=(int)sizeof(short[4*6*NCODERS])*(blockw+16);//4 padded rows  *  {Y*NCODERS, U*NCODERS, V*NCODERS,  eY*NCODERS, eU*NCODERS, eV*NCODERS} = 2*3*32 = 192 channels  ~48*iw bytes
 	pixels=(short*)_mm_malloc(psize, sizeof(__m128i));//~188 KB for 4K/12MP
@@ -1699,6 +1810,7 @@ int l1_codec(int argc, char **argv)
 		LOG_ERROR("Alloc error");
 		return 1;
 	}
+	memset(pixels, 0, psize);
 	if(fwd)
 	{
 		memset(hists, 0, hsize);
@@ -1719,18 +1831,21 @@ int l1_codec(int argc, char **argv)
 		prof_checkpoint(usize, "interleave");
 		if(dist<=1)
 		{
+			int kx, ky;
 			ALIGN(32) long long counters[OCH_COUNT]={0};
 			__m128i mcounters[OCH_COUNT];//64-bit
 			__m128i half8=_mm_set1_epi8(-128);
 			__m128i wordmask=_mm_set_epi32(0, 0xFFFF, 0, 0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(int ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
+			for(ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
 			{
 				__m128i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<ixbytes-3*NCODERS;kx+=3*NCODERS*ANALYSIS_XSTRIDE)
+				for(kx=0;kx<ixbytes-3*NCODERS;kx+=3*NCODERS*ANALYSIS_XSTRIDE)
 				{
+					__m128i rg0, gb0, br0;
+					__m128i rg1, gb1, br1;
 					__m128i r0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8);
 					__m128i g0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8);
 					__m128i b0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+2), half8);
@@ -1747,12 +1862,12 @@ int l1_codec(int argc, char **argv)
 					r1=_mm_slli_epi16(r1, 2);
 					g1=_mm_slli_epi16(g1, 2);
 					b1=_mm_slli_epi16(b1, 2);
-					__m128i rg0=_mm_sub_epi16(r0, g0);
-					__m128i gb0=_mm_sub_epi16(g0, b0);
-					__m128i br0=_mm_sub_epi16(b0, r0);
-					__m128i rg1=_mm_sub_epi16(r1, g1);
-					__m128i gb1=_mm_sub_epi16(g1, b1);
-					__m128i br1=_mm_sub_epi16(b1, r1);
+					rg0=_mm_sub_epi16(r0, g0);
+					gb0=_mm_sub_epi16(g0, b0);
+					br0=_mm_sub_epi16(b0, r0);
+					rg1=_mm_sub_epi16(r1, g1);
+					gb1=_mm_sub_epi16(g1, b1);
+					br1=_mm_sub_epi16(b1, r1);
 #ifdef ENABLE_RCT_EXTENSION
 #endif
 #define UPDATE(IDXA, IDXB, IDXC, A0, B0, C0, LANE)\
@@ -1823,35 +1938,41 @@ int l1_codec(int argc, char **argv)
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
-			for(int k=0;k<OCH_COUNT;++k)
 			{
-				ALIGN(32) int64_t temp[2]={0};
-				_mm_store_si128((__m128i*)temp, mcounters[k]);
-				counters[k]=temp[0]+temp[1];
-			}
-			long long minerr=0;
-			for(int kt=0;kt<RCT_COUNT;++kt)
-			{
-				const unsigned char *rct=rct_combinations[kt];
-				long long currerr=
-					+counters[rct[0]]
-					+counters[rct[1]]
-					+counters[rct[2]]
-				;
-#ifdef LOUD
-				printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n",
-					rct_names[kt],
-					counters[rct[0]],
-					counters[rct[1]],
-					counters[rct[2]],
-					currerr,
-					!kt||minerr>currerr?" <-":""
-				);
-#endif
-				if(!kt||minerr>currerr)
+				int k;
+				for(k=0;k<OCH_COUNT;++k)
 				{
-					minerr=currerr;
-					bestrct=kt;
+					ALIGN(32) int64_t temp[2]={0};
+					_mm_store_si128((__m128i*)temp, mcounters[k]);
+					counters[k]=temp[0]+temp[1];
+				}
+			}
+			{
+				long long minerr=0;
+				int kt;
+				for(kt=0;kt<RCT_COUNT;++kt)
+				{
+					const unsigned char *rct=rct_combinations[kt];
+					long long currerr=
+						+counters[rct[0]]
+						+counters[rct[1]]
+						+counters[rct[2]]
+					;
+#ifdef LOUD
+					printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n",
+						rct_names[kt],
+						counters[rct[0]],
+						counters[rct[1]],
+						counters[rct[2]],
+						currerr,
+						!kt||minerr>currerr?" <-":""
+					);
+#endif
+					if(!kt||minerr>currerr)
+					{
+						minerr=currerr;
+						bestrct=kt;
+					}
 				}
 			}
 
@@ -1883,7 +2004,7 @@ int l1_codec(int argc, char **argv)
 #ifndef LOUD
 		if(effort&4)
 #endif
-			printf("%s  NPREDS=%d  %td bytes\n", rct_names[bestrct], npreds, usize);
+			printf("%s  NPREDS=%d  %d bytes\n", rct_names[bestrct], npreds, (int)usize);
 	}
 	else
 	{
@@ -1914,21 +2035,23 @@ int l1_codec(int argc, char **argv)
 
 		ctxmask=*(unsigned long long*)streamptr;
 		streamptr+=8;
-		BitPackerLIFO ec;
-		bitpacker_dec_init(&ec, streamptr, streamend);
-		for(int kc=0;kc<3*NCTX;++kc)
-			dec_unpackhist(&ec, CDF2syms+((ptrdiff_t)kc<<PROBBITS), ctxmask, kc);
-		if(xremw||yremh)
 		{
-			dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)0<<PROBBITS), ctxmask, 3*NCTX+0);
-			dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)1<<PROBBITS), ctxmask, 3*NCTX+1);
-			dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)2<<PROBBITS), ctxmask, 3*NCTX+2);
+			BitPackerLIFO ec;
+			int kc;
+
+			bitpacker_dec_init(&ec, streamptr, streamend);
+			for(kc=0;kc<3*NCTX;++kc)
+				dec_unpackhist(&ec, CDF2syms+((ptrdiff_t)kc<<PROBBITS), ctxmask, kc);
+			if(xremw||yremh)
+			{
+				dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)0<<PROBBITS), ctxmask, 3*NCTX+0);
+				dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)1<<PROBBITS), ctxmask, 3*NCTX+1);
+				dec_unpackhist(&ec, rCDF2syms+((ptrdiff_t)2<<PROBBITS), ctxmask, 3*NCTX+2);
+			}
+			streamptr=(unsigned char*)(size_t)ec.srcfwdptr;
 		}
-		streamptr=(unsigned char*)(size_t)ec.srcfwdptr;
 		prof_checkpoint((ptrdiff_t)CDF2syms_size+rCDF2syms_size, "unpack histograms");
 	}
-	int L1statesize=0;
-	int *L1state=0;
 	if(npreds)
 	{
 		L1statesize=(int)sizeof(int[2*NCODERS*3*(L1_NPREDS3+1)]);//{preds, coeffs} * (NPREDS+{bias}) * 3 channels * NCODERS
@@ -1940,37 +2063,24 @@ int l1_codec(int argc, char **argv)
 		}
 		memset(L1state, 0, L1statesize);
 	}
-	const unsigned char *combination=rct_combinations[bestrct];
-	int
-		yidx=combination[II_PERM_Y]*NCODERS,
-		uidx=combination[II_PERM_U]*NCODERS,
-		vidx=combination[II_PERM_V]*NCODERS;
-	__m128i uhelpmask=_mm_set1_epi16(-(combination[II_COEFF_U_SUB_Y]!=0));
-	__m128i vc0=_mm_set1_epi16(combination[II_COEFF_V_SUB_Y]);
-	__m128i vc1=_mm_set1_epi16(combination[II_COEFF_V_SUB_U]);
-	int paddedwidth=blockw+16;
-	memset(pixels, 0, psize);
-	__m128i mctxmax=_mm_set1_epi16(NCTX-1);
-	__m128i mctxuoffset=_mm_set1_epi16(NCTX);
-	__m128i mctxvoffset=_mm_set1_epi16(NCTX*2);
-	__m128i amin=_mm_set1_epi16(-128);
-	__m128i amax=_mm_set1_epi16(127);
-	__m128i half8=_mm_set1_epi8(-128);
-	__m128i bytemask=_mm_set1_epi16(255);
-	__m128i wordmask=_mm_set1_epi32(0xFFFF);
-	__m128i myuv[6];//y y u u v v
-	__m128i dist_rcp=_mm_set1_epi16(0x7FFF), mdist=_mm_set1_epi16(1);
+	combination=rct_combinations[bestrct];
+	yidx=combination[II_PERM_Y]*NCODERS;
+	uidx=combination[II_PERM_U]*NCODERS;
+	vidx=combination[II_PERM_V]*NCODERS;
+	uhelpmask=_mm_set1_epi16(-(combination[II_COEFF_U_SUB_Y]!=0));
+	vc0=_mm_set1_epi16(combination[II_COEFF_V_SUB_Y]);
+	vc1=_mm_set1_epi16(combination[II_COEFF_V_SUB_U]);
+	paddedwidth=blockw+16;
 	if(dist>1)
 	{
 		dist_rcp=_mm_set1_epi16(((1<<16)+dist-1)/dist);//x/dist  ->  {x*=inv; x=(x>>16)+((unsigned)x>>31);}
 		mdist=_mm_set1_epi16(dist);
 	}
 	memset(myuv, 0, sizeof(myuv));
-	unsigned char *ctxptr=interleaved;
+	ctxptr=interleaved;
 	imptr=interleaved+(fwd?isize:0);
-	__m128i mstate[4];
-	__m128i *L1preds=npreds?(__m128i*)L1state:0;
-	int *L1weights=npreds?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
+	L1preds=npreds?(__m128i*)L1state:0;
+	L1weights=npreds?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
 	if(npreds>=L1_NPREDS2)
 		FILLMEM(L1weights, (1<<sh)/npreds, npreds*sizeof(int[6*8]), sizeof(int));
 	//	FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[6*8]), sizeof(int));//bias
@@ -2000,7 +2110,7 @@ int l1_codec(int argc, char **argv)
 		memcpy(mstate, streamptr, sizeof(mstate));
 		streamptr+=sizeof(mstate);
 	}
-	for(int ky=0;ky<blockh;++ky)//main coding loop
+	for(ky=0;ky<blockh;++ky)//main coding loop
 	{
 		ALIGN(32) short *rows[]=
 		{
@@ -2012,6 +2122,7 @@ int l1_codec(int argc, char **argv)
 		ALIGN(32) unsigned short syms[3*NCODERS]={0};
 		__m128i NW[6], N[6], W[6];
 		__m128i eW[6], ecurr[6], eNEE[6], eNEEE[6];
+
 		memset(NW, 0, sizeof(NW));
 		memset(N, 0, sizeof(N));
 		memset(W, 0, sizeof(W));
@@ -2026,8 +2137,15 @@ int l1_codec(int argc, char **argv)
 		eNEE[3]=_mm_load_si128((__m128i*)rows[1]+6+3+2*12);
 		eNEE[4]=_mm_load_si128((__m128i*)rows[1]+6+4+2*12);
 		eNEE[5]=_mm_load_si128((__m128i*)rows[1]+6+5+2*12);
-		for(int kx=0;kx<ixbytes;kx+=3*NCODERS)
+		for(kx=0;kx<ixbytes;kx+=3*NCODERS)
 		{
+			__m128i
+				predY[2], ctxY[2],
+				predU[2], ctxU[2],
+				predV[2], ctxV[2];
+			__m128i predYUV0[6];
+			__m128i msyms[2], moffset[2];
+
 			//                    (__m128i*)rows[-Y]+E+C+X*12
 			N[0]=_mm_load_si128((__m128i*)rows[1]+0+0+0*12);//y neighbors
 			N[1]=_mm_load_si128((__m128i*)rows[1]+0+1+0*12);
@@ -2035,11 +2153,6 @@ int l1_codec(int argc, char **argv)
 			N[3]=_mm_load_si128((__m128i*)rows[1]+0+3+0*12);
 			N[4]=_mm_load_si128((__m128i*)rows[1]+0+4+0*12);//v
 			N[5]=_mm_load_si128((__m128i*)rows[1]+0+5+0*12);
-			__m128i
-				predY[2], ctxY[2],
-				predU[2], ctxU[2],
-				predV[2], ctxV[2];
-			__m128i predYUV0[6];
 			{
 				//context = FLOOR_LOG2(eW*eW+1)
 				__m128i one=_mm_set1_epi32(1);
@@ -2098,19 +2211,21 @@ int l1_codec(int argc, char **argv)
 				cv1=_mm_srli_epi32(cv1, 23);
 				cv2=_mm_srli_epi32(cv2, 23);
 				cv3=_mm_srli_epi32(cv3, 23);
-				__m128i expbias=_mm_set1_epi32(127);
-				cy0=_mm_sub_epi32(cy0, expbias);
-				cy1=_mm_sub_epi32(cy1, expbias);
-				cy2=_mm_sub_epi32(cy2, expbias);
-				cy3=_mm_sub_epi32(cy3, expbias);
-				cu0=_mm_sub_epi32(cu0, expbias);
-				cu1=_mm_sub_epi32(cu1, expbias);
-				cu2=_mm_sub_epi32(cu2, expbias);
-				cu3=_mm_sub_epi32(cu3, expbias);
-				cv0=_mm_sub_epi32(cv0, expbias);
-				cv1=_mm_sub_epi32(cv1, expbias);
-				cv2=_mm_sub_epi32(cv2, expbias);
-				cv3=_mm_sub_epi32(cv3, expbias);
+				{
+					__m128i expbias=_mm_set1_epi32(127);
+					cy0=_mm_sub_epi32(cy0, expbias);
+					cy1=_mm_sub_epi32(cy1, expbias);
+					cy2=_mm_sub_epi32(cy2, expbias);
+					cy3=_mm_sub_epi32(cy3, expbias);
+					cu0=_mm_sub_epi32(cu0, expbias);
+					cu1=_mm_sub_epi32(cu1, expbias);
+					cu2=_mm_sub_epi32(cu2, expbias);
+					cu3=_mm_sub_epi32(cu3, expbias);
+					cv0=_mm_sub_epi32(cv0, expbias);
+					cv1=_mm_sub_epi32(cv1, expbias);
+					cv2=_mm_sub_epi32(cv2, expbias);
+					cv3=_mm_sub_epi32(cv3, expbias);
+				}
 				cy1=_mm_slli_epi32(cy1, 16);
 				cu1=_mm_slli_epi32(cu1, 16);
 				cv1=_mm_slli_epi32(cv1, 16);
@@ -2151,6 +2266,8 @@ int l1_codec(int argc, char **argv)
 
 				if(npreds==L1_NPREDS1)//predict
 				{
+					__m128i mp[12], t[12];
+					int kp;
 					/*
 					effort 1
 					0	N
@@ -2193,7 +2310,6 @@ int l1_codec(int argc, char **argv)
 
 
 					//mix
-					__m128i mp[12], t[12];
 					mp[0x0]=_mm_setzero_si128();
 					mp[0x1]=_mm_setzero_si128();
 					mp[0x2]=_mm_setzero_si128();
@@ -2206,7 +2322,7 @@ int l1_codec(int argc, char **argv)
 					mp[0x9]=_mm_setzero_si128();
 					mp[0xA]=_mm_setzero_si128();
 					mp[0xB]=_mm_setzero_si128();
-					for(int kp=0;kp<L1_NPREDS1;++kp)
+					for(kp=0;kp<L1_NPREDS1;++kp)
 					{
 						//signed 16 -> 32	3 lo 3 hi registers
 						t[0x0]=_mm_slli_epi32(L1preds[kp*6+0], 16);//y lo
@@ -2323,7 +2439,8 @@ int l1_codec(int argc, char **argv)
 				}
 				else if(npreds==L1_NPREDS2)
 				{
-					__m128i cache[6];
+					__m128i cache[6], mp[12], t[12];
+					int kp;
 					/*
 					effort 2
 					0	N
@@ -2480,7 +2597,6 @@ int l1_codec(int argc, char **argv)
 					
 
 					//mix
-					__m128i mp[12], t[12];
 					mp[0x0]=_mm_setzero_si128();
 					mp[0x1]=_mm_setzero_si128();
 					mp[0x2]=_mm_setzero_si128();
@@ -2493,40 +2609,40 @@ int l1_codec(int argc, char **argv)
 					mp[0x9]=_mm_setzero_si128();
 					mp[0xA]=_mm_setzero_si128();
 					mp[0xB]=_mm_setzero_si128();
-					for(int k=0;k<L1_NPREDS2;++k)
+					for(kp=0;kp<L1_NPREDS2;++kp)
 					{
 						//signed 16 -> 32	6 lo 6 hi registers
-						t[0x0]=_mm_slli_epi32(L1preds[k*6+0], 16);//y lo
-						t[0x1]=_mm_slli_epi32(L1preds[k*6+1], 16);
-						t[0x2]=_mm_slli_epi32(L1preds[k*6+2], 16);//u
-						t[0x3]=_mm_slli_epi32(L1preds[k*6+3], 16);
-						t[0x4]=_mm_slli_epi32(L1preds[k*6+4], 16);//v
-						t[0x5]=_mm_slli_epi32(L1preds[k*6+5], 16);
+						t[0x0]=_mm_slli_epi32(L1preds[kp*6+0], 16);//y lo
+						t[0x1]=_mm_slli_epi32(L1preds[kp*6+1], 16);
+						t[0x2]=_mm_slli_epi32(L1preds[kp*6+2], 16);//u
+						t[0x3]=_mm_slli_epi32(L1preds[kp*6+3], 16);
+						t[0x4]=_mm_slli_epi32(L1preds[kp*6+4], 16);//v
+						t[0x5]=_mm_slli_epi32(L1preds[kp*6+5], 16);
 
-						t[0x6]=_mm_srai_epi32(L1preds[k*6+0], 16);//y hi
-						t[0x7]=_mm_srai_epi32(L1preds[k*6+1], 16);
-						t[0x8]=_mm_srai_epi32(L1preds[k*6+2], 16);//u
-						t[0x9]=_mm_srai_epi32(L1preds[k*6+3], 16);
-						t[0xA]=_mm_srai_epi32(L1preds[k*6+4], 16);//v
-						t[0xB]=_mm_srai_epi32(L1preds[k*6+5], 16);
+						t[0x6]=_mm_srai_epi32(L1preds[kp*6+0], 16);//y hi
+						t[0x7]=_mm_srai_epi32(L1preds[kp*6+1], 16);
+						t[0x8]=_mm_srai_epi32(L1preds[kp*6+2], 16);//u
+						t[0x9]=_mm_srai_epi32(L1preds[kp*6+3], 16);
+						t[0xA]=_mm_srai_epi32(L1preds[kp*6+4], 16);//v
+						t[0xB]=_mm_srai_epi32(L1preds[kp*6+5], 16);
 						t[0x0]=_mm_srai_epi32(t[0x0], 16);
 						t[0x1]=_mm_srai_epi32(t[0x1], 16);
 						t[0x2]=_mm_srai_epi32(t[0x2], 16);
 						t[0x3]=_mm_srai_epi32(t[0x3], 16);
 						t[0x4]=_mm_srai_epi32(t[0x4], 16);
 						t[0x5]=_mm_srai_epi32(t[0x5], 16);
-						t[0x0]=_mm_mullo_epi32(t[0x0], _mm_load_si128((__m128i*)L1weights+k*12+0x0));
-						t[0x1]=_mm_mullo_epi32(t[0x1], _mm_load_si128((__m128i*)L1weights+k*12+0x1));
-						t[0x2]=_mm_mullo_epi32(t[0x2], _mm_load_si128((__m128i*)L1weights+k*12+0x2));
-						t[0x3]=_mm_mullo_epi32(t[0x3], _mm_load_si128((__m128i*)L1weights+k*12+0x3));
-						t[0x4]=_mm_mullo_epi32(t[0x4], _mm_load_si128((__m128i*)L1weights+k*12+0x4));
-						t[0x5]=_mm_mullo_epi32(t[0x5], _mm_load_si128((__m128i*)L1weights+k*12+0x5));
-						t[0x6]=_mm_mullo_epi32(t[0x6], _mm_load_si128((__m128i*)L1weights+k*12+0x6));
-						t[0x7]=_mm_mullo_epi32(t[0x7], _mm_load_si128((__m128i*)L1weights+k*12+0x7));
-						t[0x8]=_mm_mullo_epi32(t[0x8], _mm_load_si128((__m128i*)L1weights+k*12+0x8));
-						t[0x9]=_mm_mullo_epi32(t[0x9], _mm_load_si128((__m128i*)L1weights+k*12+0x9));
-						t[0xA]=_mm_mullo_epi32(t[0xA], _mm_load_si128((__m128i*)L1weights+k*12+0xA));
-						t[0xB]=_mm_mullo_epi32(t[0xB], _mm_load_si128((__m128i*)L1weights+k*12+0xB));
+						t[0x0]=_mm_mullo_epi32(t[0x0], _mm_load_si128((__m128i*)L1weights+kp*12+0x0));
+						t[0x1]=_mm_mullo_epi32(t[0x1], _mm_load_si128((__m128i*)L1weights+kp*12+0x1));
+						t[0x2]=_mm_mullo_epi32(t[0x2], _mm_load_si128((__m128i*)L1weights+kp*12+0x2));
+						t[0x3]=_mm_mullo_epi32(t[0x3], _mm_load_si128((__m128i*)L1weights+kp*12+0x3));
+						t[0x4]=_mm_mullo_epi32(t[0x4], _mm_load_si128((__m128i*)L1weights+kp*12+0x4));
+						t[0x5]=_mm_mullo_epi32(t[0x5], _mm_load_si128((__m128i*)L1weights+kp*12+0x5));
+						t[0x6]=_mm_mullo_epi32(t[0x6], _mm_load_si128((__m128i*)L1weights+kp*12+0x6));
+						t[0x7]=_mm_mullo_epi32(t[0x7], _mm_load_si128((__m128i*)L1weights+kp*12+0x7));
+						t[0x8]=_mm_mullo_epi32(t[0x8], _mm_load_si128((__m128i*)L1weights+kp*12+0x8));
+						t[0x9]=_mm_mullo_epi32(t[0x9], _mm_load_si128((__m128i*)L1weights+kp*12+0x9));
+						t[0xA]=_mm_mullo_epi32(t[0xA], _mm_load_si128((__m128i*)L1weights+kp*12+0xA));
+						t[0xB]=_mm_mullo_epi32(t[0xB], _mm_load_si128((__m128i*)L1weights+kp*12+0xB));
 						mp[0x0]=_mm_add_epi32(mp[0x0], t[0x0]);
 						mp[0x1]=_mm_add_epi32(mp[0x1], t[0x1]);
 						mp[0x2]=_mm_add_epi32(mp[0x2], t[0x2]);
@@ -2540,19 +2656,21 @@ int l1_codec(int argc, char **argv)
 						mp[0xA]=_mm_add_epi32(mp[0xA], t[0xA]);
 						mp[0xB]=_mm_add_epi32(mp[0xB], t[0xB]);
 					}
-					__m128i rcon=_mm_set1_epi32(1<<L1_SH2>>1);
-					mp[0x0]=_mm_add_epi32(mp[0x0], rcon);//rounding to nearest
-					mp[0x1]=_mm_add_epi32(mp[0x1], rcon);
-					mp[0x2]=_mm_add_epi32(mp[0x2], rcon);
-					mp[0x3]=_mm_add_epi32(mp[0x3], rcon);
-					mp[0x4]=_mm_add_epi32(mp[0x4], rcon);
-					mp[0x5]=_mm_add_epi32(mp[0x5], rcon);
-					mp[0x6]=_mm_add_epi32(mp[0x6], rcon);
-					mp[0x7]=_mm_add_epi32(mp[0x7], rcon);
-					mp[0x8]=_mm_add_epi32(mp[0x8], rcon);
-					mp[0x9]=_mm_add_epi32(mp[0x9], rcon);
-					mp[0xA]=_mm_add_epi32(mp[0xA], rcon);
-					mp[0xB]=_mm_add_epi32(mp[0xB], rcon);
+					{
+						__m128i rcon=_mm_set1_epi32(1<<L1_SH2>>1);
+						mp[0x0]=_mm_add_epi32(mp[0x0], rcon);//rounding to nearest
+						mp[0x1]=_mm_add_epi32(mp[0x1], rcon);
+						mp[0x2]=_mm_add_epi32(mp[0x2], rcon);
+						mp[0x3]=_mm_add_epi32(mp[0x3], rcon);
+						mp[0x4]=_mm_add_epi32(mp[0x4], rcon);
+						mp[0x5]=_mm_add_epi32(mp[0x5], rcon);
+						mp[0x6]=_mm_add_epi32(mp[0x6], rcon);
+						mp[0x7]=_mm_add_epi32(mp[0x7], rcon);
+						mp[0x8]=_mm_add_epi32(mp[0x8], rcon);
+						mp[0x9]=_mm_add_epi32(mp[0x9], rcon);
+						mp[0xA]=_mm_add_epi32(mp[0xA], rcon);
+						mp[0xB]=_mm_add_epi32(mp[0xB], rcon);
+					}
 
 					mp[0x0]=_mm_srai_epi32(mp[0x0], L1_SH2);
 					mp[0x1]=_mm_srai_epi32(mp[0x1], L1_SH2);
@@ -2609,7 +2727,8 @@ int l1_codec(int argc, char **argv)
 				}
 				else if(npreds==L1_NPREDS3)
 				{
-					__m128i cache[6];
+					__m128i cache[6], mp[12], t[12];
+					int kp;
 					/*
 					effort 3
 					0	N
@@ -2792,7 +2911,6 @@ int l1_codec(int argc, char **argv)
 
 
 					//mix
-					__m128i mp[12], t[12];
 					mp[0x0]=_mm_setzero_si128();
 					mp[0x1]=_mm_setzero_si128();
 					mp[0x2]=_mm_setzero_si128();
@@ -2805,40 +2923,40 @@ int l1_codec(int argc, char **argv)
 					mp[0x9]=_mm_setzero_si128();
 					mp[0xA]=_mm_setzero_si128();
 					mp[0xB]=_mm_setzero_si128();
-					for(int k=0;k<L1_NPREDS3;++k)
+					for(kp=0;kp<L1_NPREDS3;++kp)
 					{
 						//signed 16 -> 32	6 lo 6 hi registers
-						t[0x0]=_mm_slli_epi32(L1preds[k*6+0], 16);//y lo
-						t[0x1]=_mm_slli_epi32(L1preds[k*6+1], 16);
-						t[0x2]=_mm_slli_epi32(L1preds[k*6+2], 16);//u
-						t[0x3]=_mm_slli_epi32(L1preds[k*6+3], 16);
-						t[0x4]=_mm_slli_epi32(L1preds[k*6+4], 16);//v
-						t[0x5]=_mm_slli_epi32(L1preds[k*6+5], 16);
+						t[0x0]=_mm_slli_epi32(L1preds[kp*6+0], 16);//y lo
+						t[0x1]=_mm_slli_epi32(L1preds[kp*6+1], 16);
+						t[0x2]=_mm_slli_epi32(L1preds[kp*6+2], 16);//u
+						t[0x3]=_mm_slli_epi32(L1preds[kp*6+3], 16);
+						t[0x4]=_mm_slli_epi32(L1preds[kp*6+4], 16);//v
+						t[0x5]=_mm_slli_epi32(L1preds[kp*6+5], 16);
 
-						t[0x6]=_mm_srai_epi32(L1preds[k*6+0], 16);//y hi
-						t[0x7]=_mm_srai_epi32(L1preds[k*6+1], 16);
-						t[0x8]=_mm_srai_epi32(L1preds[k*6+2], 16);//u
-						t[0x9]=_mm_srai_epi32(L1preds[k*6+3], 16);
-						t[0xA]=_mm_srai_epi32(L1preds[k*6+4], 16);//v
-						t[0xB]=_mm_srai_epi32(L1preds[k*6+5], 16);
+						t[0x6]=_mm_srai_epi32(L1preds[kp*6+0], 16);//y hi
+						t[0x7]=_mm_srai_epi32(L1preds[kp*6+1], 16);
+						t[0x8]=_mm_srai_epi32(L1preds[kp*6+2], 16);//u
+						t[0x9]=_mm_srai_epi32(L1preds[kp*6+3], 16);
+						t[0xA]=_mm_srai_epi32(L1preds[kp*6+4], 16);//v
+						t[0xB]=_mm_srai_epi32(L1preds[kp*6+5], 16);
 						t[0x0]=_mm_srai_epi32(t[0x0], 16);
 						t[0x1]=_mm_srai_epi32(t[0x1], 16);
 						t[0x2]=_mm_srai_epi32(t[0x2], 16);
 						t[0x3]=_mm_srai_epi32(t[0x3], 16);
 						t[0x4]=_mm_srai_epi32(t[0x4], 16);
 						t[0x5]=_mm_srai_epi32(t[0x5], 16);
-						t[0x0]=_mm_mullo_epi32(t[0x0], _mm_load_si128((__m128i*)L1weights+k*12+0x0));
-						t[0x1]=_mm_mullo_epi32(t[0x1], _mm_load_si128((__m128i*)L1weights+k*12+0x1));
-						t[0x2]=_mm_mullo_epi32(t[0x2], _mm_load_si128((__m128i*)L1weights+k*12+0x2));
-						t[0x3]=_mm_mullo_epi32(t[0x3], _mm_load_si128((__m128i*)L1weights+k*12+0x3));
-						t[0x4]=_mm_mullo_epi32(t[0x4], _mm_load_si128((__m128i*)L1weights+k*12+0x4));
-						t[0x5]=_mm_mullo_epi32(t[0x5], _mm_load_si128((__m128i*)L1weights+k*12+0x5));
-						t[0x6]=_mm_mullo_epi32(t[0x6], _mm_load_si128((__m128i*)L1weights+k*12+0x6));
-						t[0x7]=_mm_mullo_epi32(t[0x7], _mm_load_si128((__m128i*)L1weights+k*12+0x7));
-						t[0x8]=_mm_mullo_epi32(t[0x8], _mm_load_si128((__m128i*)L1weights+k*12+0x8));
-						t[0x9]=_mm_mullo_epi32(t[0x9], _mm_load_si128((__m128i*)L1weights+k*12+0x9));
-						t[0xA]=_mm_mullo_epi32(t[0xA], _mm_load_si128((__m128i*)L1weights+k*12+0xA));
-						t[0xB]=_mm_mullo_epi32(t[0xB], _mm_load_si128((__m128i*)L1weights+k*12+0xB));
+						t[0x0]=_mm_mullo_epi32(t[0x0], _mm_load_si128((__m128i*)L1weights+kp*12+0x0));
+						t[0x1]=_mm_mullo_epi32(t[0x1], _mm_load_si128((__m128i*)L1weights+kp*12+0x1));
+						t[0x2]=_mm_mullo_epi32(t[0x2], _mm_load_si128((__m128i*)L1weights+kp*12+0x2));
+						t[0x3]=_mm_mullo_epi32(t[0x3], _mm_load_si128((__m128i*)L1weights+kp*12+0x3));
+						t[0x4]=_mm_mullo_epi32(t[0x4], _mm_load_si128((__m128i*)L1weights+kp*12+0x4));
+						t[0x5]=_mm_mullo_epi32(t[0x5], _mm_load_si128((__m128i*)L1weights+kp*12+0x5));
+						t[0x6]=_mm_mullo_epi32(t[0x6], _mm_load_si128((__m128i*)L1weights+kp*12+0x6));
+						t[0x7]=_mm_mullo_epi32(t[0x7], _mm_load_si128((__m128i*)L1weights+kp*12+0x7));
+						t[0x8]=_mm_mullo_epi32(t[0x8], _mm_load_si128((__m128i*)L1weights+kp*12+0x8));
+						t[0x9]=_mm_mullo_epi32(t[0x9], _mm_load_si128((__m128i*)L1weights+kp*12+0x9));
+						t[0xA]=_mm_mullo_epi32(t[0xA], _mm_load_si128((__m128i*)L1weights+kp*12+0xA));
+						t[0xB]=_mm_mullo_epi32(t[0xB], _mm_load_si128((__m128i*)L1weights+kp*12+0xB));
 						mp[0x0]=_mm_add_epi32(mp[0x0], t[0x0]);
 						mp[0x1]=_mm_add_epi32(mp[0x1], t[0x1]);
 						mp[0x2]=_mm_add_epi32(mp[0x2], t[0x2]);
@@ -2852,19 +2970,21 @@ int l1_codec(int argc, char **argv)
 						mp[0xA]=_mm_add_epi32(mp[0xA], t[0xA]);
 						mp[0xB]=_mm_add_epi32(mp[0xB], t[0xB]);
 					}
-					__m128i rcon=_mm_set1_epi32(1<<L1_SH3>>1);
-					mp[0x0]=_mm_add_epi32(mp[0x0], rcon);//rounding to nearest
-					mp[0x1]=_mm_add_epi32(mp[0x1], rcon);
-					mp[0x2]=_mm_add_epi32(mp[0x2], rcon);
-					mp[0x3]=_mm_add_epi32(mp[0x3], rcon);
-					mp[0x4]=_mm_add_epi32(mp[0x4], rcon);
-					mp[0x5]=_mm_add_epi32(mp[0x5], rcon);
-					mp[0x6]=_mm_add_epi32(mp[0x6], rcon);
-					mp[0x7]=_mm_add_epi32(mp[0x7], rcon);
-					mp[0x8]=_mm_add_epi32(mp[0x8], rcon);
-					mp[0x9]=_mm_add_epi32(mp[0x9], rcon);
-					mp[0xA]=_mm_add_epi32(mp[0xA], rcon);
-					mp[0xB]=_mm_add_epi32(mp[0xB], rcon);
+					{
+						__m128i rcon=_mm_set1_epi32(1<<L1_SH3>>1);
+						mp[0x0]=_mm_add_epi32(mp[0x0], rcon);//rounding to nearest
+						mp[0x1]=_mm_add_epi32(mp[0x1], rcon);
+						mp[0x2]=_mm_add_epi32(mp[0x2], rcon);
+						mp[0x3]=_mm_add_epi32(mp[0x3], rcon);
+						mp[0x4]=_mm_add_epi32(mp[0x4], rcon);
+						mp[0x5]=_mm_add_epi32(mp[0x5], rcon);
+						mp[0x6]=_mm_add_epi32(mp[0x6], rcon);
+						mp[0x7]=_mm_add_epi32(mp[0x7], rcon);
+						mp[0x8]=_mm_add_epi32(mp[0x8], rcon);
+						mp[0x9]=_mm_add_epi32(mp[0x9], rcon);
+						mp[0xA]=_mm_add_epi32(mp[0xA], rcon);
+						mp[0xB]=_mm_add_epi32(mp[0xB], rcon);
+					}
 
 					mp[0x0]=_mm_srai_epi32(mp[0x0], L1_SH3);
 					mp[0x1]=_mm_srai_epi32(mp[0x1], L1_SH3);
@@ -2933,7 +3053,6 @@ int l1_codec(int argc, char **argv)
 				predU[0]=_mm_min_epi16(predU[0], umax[0]); predU[1]=_mm_min_epi16(predU[1], umax[1]);
 				predV[0]=_mm_min_epi16(predV[0], vmax[0]); predV[1]=_mm_min_epi16(predV[1], vmax[1]);
 			}
-			__m128i msyms[2], moffset[2];
 			if(dist>1)
 			{
 				__m128i val[6], tmp;
@@ -3025,11 +3144,14 @@ int l1_codec(int argc, char **argv)
 					ecurr[4]=val[4];
 					ecurr[5]=val[5];
 #ifdef _DEBUG
-					for(int k=0;k<48;++k)
 					{
-						int v=((short*)val)[k];
-						if((unsigned)(v+128)>=256)
-							LOG_ERROR("");
+						int k;
+						for(k=0;k<48;++k)
+						{
+							int v=((short*)val)[k];
+							if((unsigned)(v+128)>=256)
+								LOG_ERROR("");
+						}
 					}
 #endif
 					tmp=_mm_set1_epi16(128);
@@ -3083,23 +3205,26 @@ int l1_codec(int argc, char **argv)
 							LOG_ERROR("");
 					}
 #endif
-					int *pa, *pb, *pc, va, vb, vc;
-					pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x3]; pb=hists+syms[1*16+0x3]; pc=hists+syms[2*16+0x3]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x4]; pb=hists+syms[1*16+0x4]; pc=hists+syms[2*16+0x4]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x5]; pb=hists+syms[1*16+0x5]; pc=hists+syms[2*16+0x5]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x6]; pb=hists+syms[1*16+0x6]; pc=hists+syms[2*16+0x6]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x7]; pb=hists+syms[1*16+0x7]; pc=hists+syms[2*16+0x7]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x8]; pb=hists+syms[1*16+0x8]; pc=hists+syms[2*16+0x8]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0x9]; pb=hists+syms[1*16+0x9]; pc=hists+syms[2*16+0x9]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xA]; pb=hists+syms[1*16+0xA]; pc=hists+syms[2*16+0xA]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xB]; pb=hists+syms[1*16+0xB]; pc=hists+syms[2*16+0xB]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xC]; pb=hists+syms[1*16+0xC]; pc=hists+syms[2*16+0xC]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-					pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					{
+						int *pa, *pb, *pc, va, vb, vc;
+
+						pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x3]; pb=hists+syms[1*16+0x3]; pc=hists+syms[2*16+0x3]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x4]; pb=hists+syms[1*16+0x4]; pc=hists+syms[2*16+0x4]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x5]; pb=hists+syms[1*16+0x5]; pc=hists+syms[2*16+0x5]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x6]; pb=hists+syms[1*16+0x6]; pc=hists+syms[2*16+0x6]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x7]; pb=hists+syms[1*16+0x7]; pc=hists+syms[2*16+0x7]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x8]; pb=hists+syms[1*16+0x8]; pc=hists+syms[2*16+0x8]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x9]; pb=hists+syms[1*16+0x9]; pc=hists+syms[2*16+0x9]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xA]; pb=hists+syms[1*16+0xA]; pc=hists+syms[2*16+0xA]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xB]; pb=hists+syms[1*16+0xB]; pc=hists+syms[2*16+0xB]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xC]; pb=hists+syms[1*16+0xC]; pc=hists+syms[2*16+0xC]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					}
 					ctxptr+=sizeof(short[3][NCODERS]);
 				}
 				else
@@ -3181,12 +3306,16 @@ int l1_codec(int argc, char **argv)
 					_mm_store_si128((__m128i*)(imptr+1*NCODERS), msyms24[1]);
 					_mm_store_si128((__m128i*)(imptr+2*NCODERS), msyms24[2]);
 #ifdef ENABLE_GUIDE
-					for(int kc=0;kc<3;++kc)
 					{
-						for(int k=0;k<NCODERS;++k)
+						int kc, k;
+
+						for(kc=0;kc<3;++kc)
 						{
-							double diff=imptr[kc*NCODERS+k]-g_image[imptr-interleaved+kc*NCODERS+k];
-							g_sqe[kc]+=diff*diff;
+							for(k=0;k<NCODERS;++k)
+							{
+								double diff=imptr[kc*NCODERS+k]-g_image[imptr-interleaved+kc*NCODERS+k];
+								g_sqe[kc]+=diff*diff;
+							}
 						}
 					}
 #endif
@@ -3310,23 +3439,26 @@ int l1_codec(int argc, char **argv)
 				_mm_store_si128((__m128i*)rows[0]+0+4+0*12, W[2*2+0]);//store V neighbors
 				_mm_store_si128((__m128i*)rows[0]+0+5+0*12, W[2*2+1]);
 
-				int *pa, *pb, *pc, va, vb, vc;
-				pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x3]; pb=hists+syms[1*16+0x3]; pc=hists+syms[2*16+0x3]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x4]; pb=hists+syms[1*16+0x4]; pc=hists+syms[2*16+0x4]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x5]; pb=hists+syms[1*16+0x5]; pc=hists+syms[2*16+0x5]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x6]; pb=hists+syms[1*16+0x6]; pc=hists+syms[2*16+0x6]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x7]; pb=hists+syms[1*16+0x7]; pc=hists+syms[2*16+0x7]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x8]; pb=hists+syms[1*16+0x8]; pc=hists+syms[2*16+0x8]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0x9]; pb=hists+syms[1*16+0x9]; pc=hists+syms[2*16+0x9]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xA]; pb=hists+syms[1*16+0xA]; pc=hists+syms[2*16+0xA]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xB]; pb=hists+syms[1*16+0xB]; pc=hists+syms[2*16+0xB]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xC]; pb=hists+syms[1*16+0xC]; pc=hists+syms[2*16+0xC]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
-				pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+				{
+					int *pa, *pb, *pc, va, vb, vc;
+
+					pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x3]; pb=hists+syms[1*16+0x3]; pc=hists+syms[2*16+0x3]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x4]; pb=hists+syms[1*16+0x4]; pc=hists+syms[2*16+0x4]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x5]; pb=hists+syms[1*16+0x5]; pc=hists+syms[2*16+0x5]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x6]; pb=hists+syms[1*16+0x6]; pc=hists+syms[2*16+0x6]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x7]; pb=hists+syms[1*16+0x7]; pc=hists+syms[2*16+0x7]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x8]; pb=hists+syms[1*16+0x8]; pc=hists+syms[2*16+0x8]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0x9]; pb=hists+syms[1*16+0x9]; pc=hists+syms[2*16+0x9]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xA]; pb=hists+syms[1*16+0xA]; pc=hists+syms[2*16+0xA]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xB]; pb=hists+syms[1*16+0xB]; pc=hists+syms[2*16+0xB]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xC]; pb=hists+syms[1*16+0xC]; pc=hists+syms[2*16+0xC]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+				}
 #if 0
 				++hists[syms[0*16+0x0]];
 				++hists[syms[1*16+0x0]];
@@ -3406,8 +3538,9 @@ int l1_codec(int argc, char **argv)
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+yidx, g_image+(imptr-interleaved)+yidx, NCODERS))
 				{
+					int k;
 					printf("original  decoded  original-decoded  XYC0 %d %d %d\n", kx, ky, yidx);
-					for(int k=0;k<NCODERS;++k)
+					for(k=0;k<NCODERS;++k)
 						printf("0x%02X  0x%02X  %4d\n",
 							g_image[imptr-interleaved+yidx+k],
 							imptr[yidx+k],
@@ -3447,8 +3580,9 @@ int l1_codec(int argc, char **argv)
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+uidx, g_image+(imptr-interleaved)+uidx, NCODERS))
 				{
+					int k;
 					printf("original  decoded  original-decoded  XYC1 %d %d %d\n", kx, ky, uidx);
-					for(int k=0;k<NCODERS;++k)
+					for(k=0;k<NCODERS;++k)
 						printf("0x%02X  0x%02X  %4d\n",
 							g_image[imptr-interleaved+uidx+k],
 							imptr[uidx+k],
@@ -3492,8 +3626,9 @@ int l1_codec(int argc, char **argv)
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+vidx, g_image+(imptr-interleaved)+vidx, NCODERS))
 				{
+					int k;
 					printf("original  decoded  original-decoded  XYC2 %d %d %d\n", kx, ky, vidx);
-					for(int k=0;k<NCODERS;++k)
+					for(k=0;k<NCODERS;++k)
 						printf("0x%02X  0x%02X  %4d\n",
 							g_image[imptr-interleaved+vidx+k],
 							imptr[vidx+k],
@@ -3510,6 +3645,7 @@ int l1_codec(int argc, char **argv)
 			if(npreds==L1_NPREDS1)//update
 			{
 				__m128i mu[6];
+				int k;
 
 				mu[0]=_mm_sub_epi16(W[0], predYUV0[0]);
 				mu[1]=_mm_sub_epi16(W[1], predYUV0[1]);
@@ -3517,7 +3653,7 @@ int l1_codec(int argc, char **argv)
 				mu[3]=_mm_sub_epi16(W[3], predYUV0[3]);
 				mu[4]=_mm_sub_epi16(W[4], predYUV0[4]);
 				mu[5]=_mm_sub_epi16(W[5], predYUV0[5]);
-				for(int k=0;k<L1_NPREDS1;++k)//update
+				for(k=0;k<L1_NPREDS1;++k)//update
 				{
 					__m128i mc[12];
 					mc[0x0]=_mm_sign_epi16(L1preds[k*6+0], mu[0]);//L1
@@ -3583,6 +3719,7 @@ int l1_codec(int argc, char **argv)
 			else if(npreds==L1_NPREDS2)//update
 			{
 				__m128i mu[6];
+				int k;
 
 				mu[0]=_mm_sub_epi16(W[0], predYUV0[0]);
 				mu[1]=_mm_sub_epi16(W[1], predYUV0[1]);
@@ -3590,7 +3727,7 @@ int l1_codec(int argc, char **argv)
 				mu[3]=_mm_sub_epi16(W[3], predYUV0[3]);
 				mu[4]=_mm_sub_epi16(W[4], predYUV0[4]);
 				mu[5]=_mm_sub_epi16(W[5], predYUV0[5]);
-				for(int k=0;k<L1_NPREDS2;++k)//update
+				for(k=0;k<L1_NPREDS2;++k)//update
 				{
 					__m128i mc[12];
 					mc[0x0]=_mm_sign_epi16(L1preds[k*6+0], mu[0]);//L1
@@ -3656,6 +3793,7 @@ int l1_codec(int argc, char **argv)
 			else if(npreds==L1_NPREDS3)//update
 			{
 				__m128i mu[6];
+				int k;
 
 				mu[0]=_mm_sub_epi16(W[0], predYUV0[0]);
 				mu[1]=_mm_sub_epi16(W[1], predYUV0[1]);
@@ -3663,7 +3801,7 @@ int l1_codec(int argc, char **argv)
 				mu[3]=_mm_sub_epi16(W[3], predYUV0[3]);
 				mu[4]=_mm_sub_epi16(W[4], predYUV0[4]);
 				mu[5]=_mm_sub_epi16(W[5], predYUV0[5]);
-				for(int k=0;k<L1_NPREDS3;++k)//update
+				for(k=0;k<L1_NPREDS3;++k)//update
 				{
 					__m128i mc[12];
 					mc[0x0]=_mm_sign_epi16(L1preds[k*6+0], mu[0]);//L1
@@ -3810,48 +3948,55 @@ int l1_codec(int argc, char **argv)
 	{
 		rANS_SIMD_SymInfo *syminfo=(rANS_SIMD_SymInfo*)CDF2syms;
 		rANS_SIMD_SymInfo *rsyminfo=(rANS_SIMD_SymInfo*)rCDF2syms;
+		int kx, ky;
+		unsigned short *ctxptr2=0;
 
 		//normalize/integrate hists
-		for(int kc=0;kc<3*NCTX;++kc)
-			enc_hist2stats(hists+(ptrdiff_t)256*kc, syminfo+(ptrdiff_t)256*kc, &ctxmask, kc);
+		{
+			int kc;
+			for(kc=0;kc<3*NCTX;++kc)
+				enc_hist2stats(hists+(ptrdiff_t)256*kc, syminfo+(ptrdiff_t)256*kc, &ctxmask, kc);
+		}
 		
 		//encode remainder
 		if(xremw||yremh)
 		{
 			memset(rhist, 0, rhsize);
-			for(int ky=0;ky<yremh;++ky)
+			for(ky=0;ky<yremh;++ky)
 				decorr1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, rhist);
-			for(int kx=0;kx<xremw;++kx)
+			for(kx=0;kx<xremw;++kx)
 				decorr1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, rhist);
 			enc_hist2stats(rhist+(ptrdiff_t)256*0, rsyminfo+(ptrdiff_t)256*0, &ctxmask, 3*NCTX+0);
 			enc_hist2stats(rhist+(ptrdiff_t)256*1, rsyminfo+(ptrdiff_t)256*1, &ctxmask, 3*NCTX+1);
 			enc_hist2stats(rhist+(ptrdiff_t)256*2, rsyminfo+(ptrdiff_t)256*2, &ctxmask, 3*NCTX+2);
 			
-			unsigned state=1<<(RANS_STATE_BITS-RANS_RENORM_BITS);
-			for(int kx=xremw-1;kx>=0;--kx)
-				encode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &state, &streamptr, image, rsyminfo);
-			for(int ky=yremh-1;ky>=0;--ky)
-				encode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &state, &streamptr, image, rsyminfo);
-			//flush
-			streamptr-=4;
+			{
+				unsigned state=1<<(RANS_STATE_BITS-RANS_RENORM_BITS);
+				for(kx=xremw-1;kx>=0;--kx)
+					encode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &state, &streamptr, image, rsyminfo);
+				for(ky=yremh-1;ky>=0;--ky)
+					encode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &state, &streamptr, image, rsyminfo);
+				//flush
+				streamptr-=4;
 #ifdef _DEBUG
-			if(streamptr<=image)
-				LOG_ERROR("OOB ptr %016zX <= %016zX", streamptr, image);
+				if(streamptr<=image)
+					LOG_ERROR("OOB ptr %016zX <= %016zX", streamptr, image);
 #endif
-			*(unsigned*)streamptr=state;
+				*(unsigned*)streamptr=state;
+			}
 			prof_checkpoint(usize-isize, "encode remainder");
-			profile_size(streamptr, "/ %9td bytes remainders", usize-isize);
+			profile_size(streamptr, "/ %9d bytes remainders", (int)(usize-isize));
 		}
 
 		//encode main
 		mstate[3]=mstate[2]=mstate[1]=mstate[0]=_mm_set1_epi32(1<<(RANS_STATE_BITS-RANS_RENORM_BITS));
-		unsigned short *ctxptr2=(unsigned short*)(interleaved+(isize<<1)-sizeof(short[NCODERS]));
-		for(int ky=blockh-1;ky>=0;--ky)
+		ctxptr2=(unsigned short*)(interleaved+(isize<<1)-sizeof(short[NCODERS]));
+		for(ky=blockh-1;ky>=0;--ky)
 		{
 #ifdef ESTIMATE_SIZE
 			int kc=2;
 #endif
-			for(int kx=ixbytes-NCODERS;kx>=0;kx-=NCODERS)//ixbytes = iw/XCODERS*NCODERS*3
+			for(kx=ixbytes-NCODERS;kx>=0;kx-=NCODERS)//ixbytes = iw/XCODERS*NCODERS*3
 			{
 				__m128i mmax[4], minvf[4], mcdf[4], mnegf_sh[4];
 				{
@@ -3931,43 +4076,45 @@ int l1_codec(int argc, char **argv)
 					kc=2;
 #endif
 				//enc renorm		if(state>(freq<<(31-12))-1){write16(state); state>>=16;}
-				__m128i cond0=_mm_cmpgt_epi32(mstate[0], mmax[0]);
-				__m128i cond1=_mm_cmpgt_epi32(mstate[1], mmax[1]);
-				__m128i cond2=_mm_cmpgt_epi32(mstate[2], mmax[2]);
-				__m128i cond3=_mm_cmpgt_epi32(mstate[3], mmax[3]);
-				int mask0=_mm_movemask_ps(_mm_castsi128_ps(cond0));
-				int mask1=_mm_movemask_ps(_mm_castsi128_ps(cond1));
-				int mask2=_mm_movemask_ps(_mm_castsi128_ps(cond2));
-				int mask3=_mm_movemask_ps(_mm_castsi128_ps(cond3));
-				__m128i idx0=_mm_load_si128((__m128i*)ans_permute_enc+mask0);
-				__m128i idx1=_mm_load_si128((__m128i*)ans_permute_enc+mask1);
-				__m128i idx2=_mm_load_si128((__m128i*)ans_permute_enc+mask2);
-				__m128i idx3=_mm_load_si128((__m128i*)ans_permute_enc+mask3);
-				__m128i emit0=_mm_shuffle_epi8(mstate[0], idx0);
-				__m128i emit1=_mm_shuffle_epi8(mstate[1], idx1);
-				__m128i emit2=_mm_shuffle_epi8(mstate[2], idx2);
-				__m128i emit3=_mm_shuffle_epi8(mstate[3], idx3);
-				mask0=popcnt_table[mask0];
-				mask1=popcnt_table[mask1];
-				mask2=popcnt_table[mask2];
-				mask3=popcnt_table[mask3];
-#ifdef _DEBUG
-				if(streamptr-(2*((ptrdiff_t)mask0+mask1+mask2+mask3)+sizeof(__m128i))<=image)
-					LOG_ERROR("OOB ptr %016zX <= %016zX", streamptr, image);
-#endif
-				_mm_storeu_si128((__m128i*)streamptr-1, emit3); streamptr-=mask3;
-				_mm_storeu_si128((__m128i*)streamptr-1, emit2); streamptr-=mask2;
-				_mm_storeu_si128((__m128i*)streamptr-1, emit1); streamptr-=mask1;
-				_mm_storeu_si128((__m128i*)streamptr-1, emit0); streamptr-=mask0;
 				{
-					__m128i state0=_mm_srli_epi32(mstate[0], 16);
-					__m128i state1=_mm_srli_epi32(mstate[1], 16);
-					__m128i state2=_mm_srli_epi32(mstate[2], 16);
-					__m128i state3=_mm_srli_epi32(mstate[3], 16);
-					mstate[0]=_mm_blendv_epi8(mstate[0], state0, cond0);
-					mstate[1]=_mm_blendv_epi8(mstate[1], state1, cond1);
-					mstate[2]=_mm_blendv_epi8(mstate[2], state2, cond2);
-					mstate[3]=_mm_blendv_epi8(mstate[3], state3, cond3);
+					__m128i cond0=_mm_cmpgt_epi32(mstate[0], mmax[0]);
+					__m128i cond1=_mm_cmpgt_epi32(mstate[1], mmax[1]);
+					__m128i cond2=_mm_cmpgt_epi32(mstate[2], mmax[2]);
+					__m128i cond3=_mm_cmpgt_epi32(mstate[3], mmax[3]);
+					int mask0=_mm_movemask_ps(_mm_castsi128_ps(cond0));
+					int mask1=_mm_movemask_ps(_mm_castsi128_ps(cond1));
+					int mask2=_mm_movemask_ps(_mm_castsi128_ps(cond2));
+					int mask3=_mm_movemask_ps(_mm_castsi128_ps(cond3));
+					__m128i idx0=_mm_load_si128((__m128i*)ans_permute_enc+mask0);
+					__m128i idx1=_mm_load_si128((__m128i*)ans_permute_enc+mask1);
+					__m128i idx2=_mm_load_si128((__m128i*)ans_permute_enc+mask2);
+					__m128i idx3=_mm_load_si128((__m128i*)ans_permute_enc+mask3);
+					__m128i emit0=_mm_shuffle_epi8(mstate[0], idx0);
+					__m128i emit1=_mm_shuffle_epi8(mstate[1], idx1);
+					__m128i emit2=_mm_shuffle_epi8(mstate[2], idx2);
+					__m128i emit3=_mm_shuffle_epi8(mstate[3], idx3);
+					mask0=popcnt_table[mask0];
+					mask1=popcnt_table[mask1];
+					mask2=popcnt_table[mask2];
+					mask3=popcnt_table[mask3];
+#ifdef _DEBUG
+					if(streamptr-(2*((ptrdiff_t)mask0+mask1+mask2+mask3)+sizeof(__m128i))<=image)
+						LOG_ERROR("OOB ptr %016zX <= %016zX", streamptr, image);
+#endif
+					_mm_storeu_si128((__m128i*)streamptr-1, emit3); streamptr-=mask3;
+					_mm_storeu_si128((__m128i*)streamptr-1, emit2); streamptr-=mask2;
+					_mm_storeu_si128((__m128i*)streamptr-1, emit1); streamptr-=mask1;
+					_mm_storeu_si128((__m128i*)streamptr-1, emit0); streamptr-=mask0;
+					{
+						__m128i state0=_mm_srli_epi32(mstate[0], 16);
+						__m128i state1=_mm_srli_epi32(mstate[1], 16);
+						__m128i state2=_mm_srli_epi32(mstate[2], 16);
+						__m128i state3=_mm_srli_epi32(mstate[3], 16);
+						mstate[0]=_mm_blendv_epi8(mstate[0], state0, cond0);
+						mstate[1]=_mm_blendv_epi8(mstate[1], state1, cond1);
+						mstate[2]=_mm_blendv_epi8(mstate[2], state2, cond2);
+						mstate[3]=_mm_blendv_epi8(mstate[3], state3, cond3);
+					}
 				}
 #ifdef ANS_VAL
 				ansval_push(mstate, sizeof(int), NCODERS);
@@ -4160,7 +4307,7 @@ int l1_codec(int argc, char **argv)
 #endif
 		memcpy(streamptr, mstate, sizeof(mstate));
 		prof_checkpoint(isize, "encode main");
-		profile_size(streamptr, "/ %9td bytes main", isize);
+		profile_size(streamptr, "/ %9d bytes main", (int)isize);
 
 		//pack hists
 		{
@@ -4172,8 +4319,11 @@ int l1_codec(int argc, char **argv)
 				enc_packhist(&ec, rhist+256*1, ctxmask, 3*NCTX+1);
 				enc_packhist(&ec, rhist+256*0, ctxmask, 3*NCTX+0);
 			}
-			for(int kc=3*NCTX-1;kc>=0;--kc)
-				enc_packhist(&ec, hists+(ptrdiff_t)256*kc, ctxmask, kc);
+			{
+				int kc;
+				for(kc=3*NCTX-1;kc>=0;--kc)
+					enc_packhist(&ec, hists+(ptrdiff_t)256*kc, ctxmask, kc);
+			}
 			bitpacker_enc_flush(&ec);
 			streamptr=ec.dstbwdptr;
 
@@ -4185,18 +4335,20 @@ int l1_codec(int argc, char **argv)
 
 		//save compressed file
 		{
+			ptrdiff_t csize2=0;
 			FILE *fdst=fopen(dstfn, "wb");
 			if(!fdst)
 			{
 				LOG_ERROR("Cannot open \"%s\" for writing", fdst);
 				return 1;
 			}
-			ptrdiff_t csize2=0;
 			csize2+=fwrite("32", 1, 2, fdst);
 			csize2+=fwrite(&iw, 1, 4, fdst);
 			csize2+=fwrite(&ih, 1, 4, fdst);
-			int flags=bestrct<<2|(effort&3);
-			csize2+=fwrite(&flags, 1, 1, fdst);
+			{
+				int flags=bestrct<<2|(effort&3);
+				csize2+=fwrite(&flags, 1, 1, fdst);
+			}
 			csize2+=fwrite(&dist, 1, 1, fdst);
 #ifdef _DEBUG
 			if(streamptr>streamstart)
@@ -4217,8 +4369,11 @@ int l1_codec(int argc, char **argv)
 			printf("Total estimate  %12.2lf bytes\n", etotal);
 #endif
 #ifdef LOUD
-			printf("%s  WH %d*%d\n", srcfn, iw, ih);
-			printf("%8td/%8td bytes\n", csize2, usize2);
+			{
+				ptrdiff_t usize2=get_filesize(srcfn);
+				printf("%s  WH %d*%d\n", srcfn, iw, ih);
+				printf("%8d/%8d bytes\n", (int)csize2, (int)usize2);
+			}
 #endif
 			(void)csize2;
 			prof_checkpoint(csize2, "fwrite");
@@ -4238,12 +4393,15 @@ int l1_codec(int argc, char **argv)
 			if(streamptr>streamend)
 				LOG_ERROR("OOB ptr %016zX >= %016zX", streamptr, streamend);
 #endif
-			unsigned state=*(unsigned*)streamptr;
-			streamptr+=4;
-			for(int ky=0;ky<yremh;++ky)
-				decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, &state, (const unsigned char**)&streamptr, streamend, rCDF2syms);
-			for(int kx=0;kx<xremw;++kx)
-				decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, &state, (const unsigned char**)&streamptr, streamend, rCDF2syms);
+			{
+				int kx, ky;
+				unsigned state=*(unsigned*)streamptr;
+				streamptr+=4;
+				for(ky=0;ky<yremh;++ky)
+					decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, &state, (const unsigned char**)&streamptr, streamend, rCDF2syms);
+				for(kx=0;kx<xremw;++kx)
+					decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, &state, (const unsigned char**)&streamptr, streamend, rCDF2syms);
+			}
 			prof_checkpoint(usize-isize, "remainder");
 		}
 

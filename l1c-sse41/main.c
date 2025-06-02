@@ -7,9 +7,11 @@
 #ifdef PROFILER
 #include"util.h"
 #endif
+#ifdef _DEBUG
 #include<stdio.h>
 #include<stdlib.h>
-int l1_codec(int argc, char **argv);//C32: like C29 but 16 coders
+#endif
+int l1_codec(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -17,7 +19,8 @@ int main(int argc, char **argv)
 #ifdef PROFILER
 	void *prof_ctx=prof_start();
 #endif
-#ifdef __GNUC__
+//#ifdef __GNUC__
+#ifndef _DEBUG
 	retcode=l1_codec(argc, argv);
 #else
 	const char *dstfn=//OVERWRITTEN
@@ -36,11 +39,11 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/big_building.PPM"
 	//	"C:/Projects/datasets/dataset-CLIC303-ppm/2048x1320_abigail-keenan-27293.ppm"
 	//	"C:/Projects/datasets/dataset-CLIC30-ppm/03.ppm"
-		"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
+	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/0801-cg.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-kodak-ppm/kodim23.ppm"
-	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+		"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/PIA13882.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/STA13843.ppm"	//large
 	//	"C:/Projects/datasets/kodim13.ppm"
@@ -150,7 +153,7 @@ int main(int argc, char **argv)
 	//	"D:/ML/zzz_halfbright.PPM"
 	//	"D:/Programs/c29/song.ppm"
 	;
-#if 1
+
 	const char *encargs[]=
 	{
 		argv[0],
@@ -165,27 +168,17 @@ int main(int argc, char **argv)
 		tmpfn,
 		dstfn,
 	};
-#endif
-#if 0
-	const char *encargs[]=
-	{
-		argv[0],
-		srcfn,
-		tmpfn,
-		"0",//default nthreads
-		"11",//near
-	};
-	const char *decargs[]=
-	{
-		argv[0],
-		tmpfn,
-		dstfn,
-	};
-#endif
 	if(l1_codec(_countof(encargs), (char**)encargs))
 		return 1;
 	if(l1_codec(_countof(decargs), (char**)decargs))
 		return 1;
+#if _MSC_VER<1900
+	{
+		int k=0;
+		printf("Enter 0 to continue: ");
+		while(!scanf(" %d", &k));
+	}
+#endif
 #endif
 #ifdef PROFILER
 	prof_end(prof_ctx);
