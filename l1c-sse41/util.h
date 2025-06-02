@@ -165,6 +165,7 @@ extern "C"
 		DST=_mm_extract_epi32(result, 0);\
 	}while(0)
 
+#if 0
 #ifdef __GNUC__
 #define UMUL128(DST_HI, DST_LO, A, B)\
 	do\
@@ -186,6 +187,7 @@ extern "C"
 #define UMUL128(DST_HI, DST_LO, A, B) DST_LO=_umul128(A, B, &(DST_HI))
 #define MULHI64(DST, A, B) _umul128(A, B, &(DST))
 #define UDIV128(DST_Q, DST_R, NUM_HI, NUM_LO, DEN) DST_Q=_udiv128(NUM_HI, NUM_LO, DEN, &(DST_R))
+#endif
 #endif
 
 #define MOVEOBJ(SRC, DST, SIZE) memcpy(DST, SRC, SIZE), memset(SRC, 0, SIZE)

@@ -1043,6 +1043,7 @@ int acme_isdigit(char c, char base)
 	}
 	return 0;
 }
+#if 0
 #ifdef __GNUC__
 unsigned long long _udiv128(unsigned long long hi, unsigned long long lo, unsigned long long den, unsigned long long *rem)
 {
@@ -1058,6 +1059,7 @@ unsigned long long _umul128(unsigned long long a, unsigned long long b, unsigned
 	*hi=(unsigned long long)(num>>64);
 	return (unsigned long long)num;
 }
+#endif
 #endif
 
 double time_ms(void)
