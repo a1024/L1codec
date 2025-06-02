@@ -156,7 +156,6 @@ static void prof_print(ptrdiff_t usize)
 		if(tmax<t)
 			tmax=t;
 	}
-	int printed=0;
 	int prev=0;
 	double csum=0;
 	//printf("| ");
@@ -201,7 +200,6 @@ static void prof_print(ptrdiff_t usize)
 		//	colorprintf(COLORPRINTF_TXT_DEFAULT, colors[k], "%*s", space, "");
 		printf("|");
 		prev=curr;
-		printed+=space+2+(k<prof_count-1);
 	}
 	printf("\n");
 	for(int k=0;k<prof_count;++k)
@@ -705,7 +703,6 @@ static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long l
 	{
 		unsigned short CDF[257]={0};
 		int CDFlevels=1<<PROBBITS;
-		int cdfW=0;
 		CDF[0]=0;
 		for(int ks=0;ks<256;++ks)//decode GR
 		{
@@ -728,7 +725,6 @@ static void dec_unpackhist(BitPackerLIFO *ec, unsigned *CDF2sym, unsigned long l
 			if(nbypass)
 				freq=freq<<nbypass|bitpacker_dec(ec, nbypass);
 
-			cdfW+=freq;
 			CDF[ks]=freq;
 			CDFlevels-=freq;
 			if(CDFlevels<=0)
@@ -1556,12 +1552,12 @@ int l1_codec(int argc, char **argv)
 	int CDF2syms_size=(int)sizeof(int[3*NCTX<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses these as SIMD symbol info
 		CDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3*NCTX<<8]);
-	unsigned *CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m128i*));
+	unsigned *CDF2syms=(unsigned*)_mm_malloc(CDF2syms_size, sizeof(__m256i));
 
 	int rCDF2syms_size=(int)sizeof(int[3<<PROBBITS]);
 	if(fwd)
 		rCDF2syms_size=(int)sizeof(rANS_SIMD_SymInfo[3<<8]);
-	unsigned *rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m128i*));
+	unsigned *rCDF2syms=(unsigned*)_mm_malloc(rCDF2syms_size, sizeof(__m256i));
 
 	int ans_permute_size=sizeof(__m256i[256]);
 	int *ans_permute=(int*)_mm_malloc(ans_permute_size, sizeof(__m256i));
@@ -3133,6 +3129,7 @@ int l1_codec(int argc, char **argv)
 			rows[3]+=6*NCODERS;
 			imptr+=3*NCODERS;
 		}
+		//printf("%8d/%8d\r", ky+1, blockh);
 	}
 	prof_checkpoint(isize, "main");
 #ifdef ENABLE_GUIDE
@@ -3217,6 +3214,8 @@ int l1_codec(int argc, char **argv)
 				{
 					__m256i s0, s1, s2, s3;
 					__m256i t0, t1, t2, t3;
+					//if((ptrdiff_t)syminfo&31)
+					//	LOG_ERROR("%p", syminfo);
 #define SHUFFLE_PS(LO, HI, IMM8_HHLL) _mm256_castps_si256(_mm256_shuffle_ps(_mm256_castsi256_ps(LO), _mm256_castsi256_ps(HI), IMM8_HHLL))
 
 					s0=_mm256_castsi128_si256(	_mm_load_si128((__m128i*)(syminfo+ctxptr2[0*8+0])));
@@ -3345,6 +3344,7 @@ int l1_codec(int argc, char **argv)
 				ansval_push(mstate, sizeof(int), NCODERS);
 #endif
 			}
+			//printf("%8d/%8d\r", blockh-1-ky, blockh);
 		}
 		//flush
 		streamptr-=sizeof(mstate);
