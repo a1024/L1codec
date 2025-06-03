@@ -19,6 +19,7 @@ static const char file[]=__FILE__;
 	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
 //	#define ANS_VAL			//DEBUG
 
+//	#define SAVE_RESIDUALS
 //	#define PRINT_L1_BOUNDS
 //	#define TEST_INTERLEAVE
 #endif
@@ -35,9 +36,9 @@ static const char file[]=__FILE__;
 #define L1_NPREDS1 4
 #define L1_NPREDS2 8
 #define L1_NPREDS3 11
-#define L1_SH1 15
+#define L1_SH1 15	//L1_SH1 <= 16
 #define L1_SH2 17
-#define L1_SH3 17
+#define L1_SH3 18
 
 //3*17+3=54 contexts
 #define GRBITS 3
@@ -1421,7 +1422,8 @@ int l1_codec(int argc, char **argv)
 		return 1;
 	}
 	const char *srcfn=argv[1], *dstfn=argv[2];
-	int effort=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
+	int param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
+	int effort=param1&3, profile=param1>>2;
 	if(dist>1)
 		CLAMP2(dist, 4, 16);
 #ifdef ESTIMATE_SIZE
@@ -1695,7 +1697,7 @@ int l1_codec(int argc, char **argv)
 			//printf("%2d ", bestrct);
 			prof_checkpoint(usize, "analysis");
 		}
-		switch(effort&3)
+		switch(effort)
 		{
 		case 0://use CG
 			npreds=0;
@@ -1714,7 +1716,7 @@ int l1_codec(int argc, char **argv)
 			break;
 		}
 #ifndef LOUD
-		if(effort&4)
+		if(profile)
 #endif
 			printf("%s  NPREDS=%d  %td bytes\n", rct_names[bestrct], npreds, usize);
 
@@ -1736,11 +1738,11 @@ int l1_codec(int argc, char **argv)
 	{
 		//decode flags, stats
 		int flags=*streamptr++;
-		int effort2=flags&3;
+		effort=flags&3;
 		flags>>=2;
 		bestrct=flags%RCT_COUNT;
 		dist=*streamptr++;
-		switch(effort2&3)
+		switch(effort)
 		{
 		case 0://use CG
 			npreds=0;
@@ -1790,7 +1792,7 @@ int l1_codec(int argc, char **argv)
 	}
 	int L1statesize=0;
 	int *L1state=0;
-	if(npreds)
+	if(effort)
 	{
 		L1statesize=(int)sizeof(int[2*NCODERS*3*(L1_NPREDS3+1)]);//{preds, coeffs} * (NPREDS+{bias}) * 3 channels * NCODERS
 		L1state=(int*)_mm_malloc(L1statesize, sizeof(__m256i));
@@ -1825,6 +1827,19 @@ int l1_codec(int argc, char **argv)
 	__m256i wordmask=_mm256_set1_epi32(0xFFFF);
 	__m256i myuv[3];
 	__m256i dist_rcp=_mm256_set1_epi16(0x7FFF), mdist=_mm256_set1_epi16(1);
+#ifdef SAVE_RESIDUALS
+	unsigned char *residuals=0;
+	if(fwd)
+	{
+		residuals=(unsigned char*)malloc(isize);
+		if(!residuals)
+		{
+			LOG_ERROR("Alloc error");
+			return;
+		}
+		memset(residuals, 0, isize);
+	}
+#endif
 	if(dist>1)
 	{
 		dist_rcp=_mm256_set1_epi16(((1<<16)+dist-1)/dist);//x/dist  ->  {x*=inv; x=(x>>16)+((unsigned)x>>31);}
@@ -1834,9 +1849,9 @@ int l1_codec(int argc, char **argv)
 	unsigned char *ctxptr=interleaved;
 	imptr=interleaved+(fwd?isize:0);
 	__m256i mstate[2];
-	__m256i *L1preds=npreds?(__m256i*)L1state:0;
-	int *L1weights=npreds?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
-	if(npreds>=L1_NPREDS2)
+	__m256i *L1preds=effort?(__m256i*)L1state:0;
+	int *L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
+	if(effort)
 		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[6*8]), sizeof(int));
 	//{
 	//	static const int weights0[]=
@@ -1972,7 +1987,7 @@ int l1_codec(int argc, char **argv)
 				//if(ky==5&&kx==48)//
 				//	printf("");
 
-				if(npreds==L1_NPREDS1)//predict
+				if(effort==1)//predict
 				{
 					/*
 					effort 1
@@ -2058,22 +2073,25 @@ int l1_codec(int argc, char **argv)
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH1);
 					mp[1]=_mm256_srai_epi32(mp[1], L1_SH1);
 					mp[2]=_mm256_srai_epi32(mp[2], L1_SH1);
-					mp[3]=_mm256_srai_epi32(mp[3], L1_SH1);
-					mp[4]=_mm256_srai_epi32(mp[4], L1_SH1);
-					mp[5]=_mm256_srai_epi32(mp[5], L1_SH1);
+					mp[3]=_mm256_slli_epi32(mp[3], 16-L1_SH1);
+					mp[4]=_mm256_slli_epi32(mp[4], 16-L1_SH1);
+					mp[5]=_mm256_slli_epi32(mp[5], 16-L1_SH1);
 					//32 -> 16
-					mp[0]=_mm256_slli_epi32(mp[0], 16);
-					mp[1]=_mm256_slli_epi32(mp[1], 16);
-					mp[2]=_mm256_slli_epi32(mp[2], 16);
-					mp[3]=_mm256_slli_epi32(mp[3], 16);
-					mp[4]=_mm256_slli_epi32(mp[4], 16);
-					mp[5]=_mm256_slli_epi32(mp[5], 16);
-					mp[0]=_mm256_srli_epi32(mp[0], 16);
-					mp[1]=_mm256_srli_epi32(mp[1], 16);
-					mp[2]=_mm256_srli_epi32(mp[2], 16);
-					predY=_mm256_or_si256(mp[0], mp[3]);
-					predU=_mm256_or_si256(mp[1], mp[4]);
-					predV=_mm256_or_si256(mp[2], mp[5]);
+					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
+					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
+					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
+					//mp[0]=_mm256_slli_epi32(mp[0], 16);
+					//mp[1]=_mm256_slli_epi32(mp[1], 16);
+					//mp[2]=_mm256_slli_epi32(mp[2], 16);
+					//mp[3]=_mm256_slli_epi32(mp[3], 16);
+					//mp[4]=_mm256_slli_epi32(mp[4], 16);
+					//mp[5]=_mm256_slli_epi32(mp[5], 16);
+					//mp[0]=_mm256_srli_epi32(mp[0], 16);
+					//mp[1]=_mm256_srli_epi32(mp[1], 16);
+					//mp[2]=_mm256_srli_epi32(mp[2], 16);
+					//predY=_mm256_or_si256(mp[0], mp[3]);
+					//predU=_mm256_or_si256(mp[1], mp[4]);
+					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
@@ -2096,7 +2114,7 @@ int l1_codec(int argc, char **argv)
 					//vmin=_mm256_min_epi16(vmin, t[2]);
 					//vmax=_mm256_max_epi16(vmax, t[2]);
 				}
-				else if(npreds==L1_NPREDS2)
+				else if(effort==2)
 				{
 					__m256i cache[3];
 					/*
@@ -2253,22 +2271,25 @@ int l1_codec(int argc, char **argv)
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH2);
 					mp[1]=_mm256_srai_epi32(mp[1], L1_SH2);
 					mp[2]=_mm256_srai_epi32(mp[2], L1_SH2);
-					mp[3]=_mm256_srai_epi32(mp[3], L1_SH2);
-					mp[4]=_mm256_srai_epi32(mp[4], L1_SH2);
-					mp[5]=_mm256_srai_epi32(mp[5], L1_SH2);
+					mp[3]=_mm256_srai_epi32(mp[3], L1_SH2-16);
+					mp[4]=_mm256_srai_epi32(mp[4], L1_SH2-16);
+					mp[5]=_mm256_srai_epi32(mp[5], L1_SH2-16);
 					//32 -> 16
-					mp[0]=_mm256_slli_epi32(mp[0], 16);
-					mp[1]=_mm256_slli_epi32(mp[1], 16);
-					mp[2]=_mm256_slli_epi32(mp[2], 16);
-					mp[3]=_mm256_slli_epi32(mp[3], 16);
-					mp[4]=_mm256_slli_epi32(mp[4], 16);
-					mp[5]=_mm256_slli_epi32(mp[5], 16);
-					mp[0]=_mm256_srli_epi32(mp[0], 16);
-					mp[1]=_mm256_srli_epi32(mp[1], 16);
-					mp[2]=_mm256_srli_epi32(mp[2], 16);
-					predY=_mm256_or_si256(mp[0], mp[3]);
-					predU=_mm256_or_si256(mp[1], mp[4]);
-					predV=_mm256_or_si256(mp[2], mp[5]);
+					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
+					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
+					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
+					//mp[0]=_mm256_slli_epi32(mp[0], 16);
+					//mp[1]=_mm256_slli_epi32(mp[1], 16);
+					//mp[2]=_mm256_slli_epi32(mp[2], 16);
+					//mp[3]=_mm256_slli_epi32(mp[3], 16);
+					//mp[4]=_mm256_slli_epi32(mp[4], 16);
+					//mp[5]=_mm256_slli_epi32(mp[5], 16);
+					//mp[0]=_mm256_srli_epi32(mp[0], 16);
+					//mp[1]=_mm256_srli_epi32(mp[1], 16);
+					//mp[2]=_mm256_srli_epi32(mp[2], 16);
+					//predY=_mm256_or_si256(mp[0], mp[3]);
+					//predU=_mm256_or_si256(mp[1], mp[4]);
+					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
@@ -2291,7 +2312,7 @@ int l1_codec(int argc, char **argv)
 					vmin=_mm256_min_epi16(vmin, cache[2]);
 					vmax=_mm256_max_epi16(vmax, cache[2]);
 				}
-				else if(npreds==L1_NPREDS3)
+				else if(effort==3)
 				{
 					__m256i cache[3];
 					/*
@@ -2306,6 +2327,7 @@ int l1_codec(int argc, char **argv)
 					7	W+NE-N
 					8	N+W-NW
 					9	N+NE-NNE
+					10	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-(NW+N))>>2
 					*/
 
 					//N
@@ -2396,7 +2418,7 @@ int l1_codec(int argc, char **argv)
 					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[1]+0+0+4*6));//+NEEEE
 					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[1]+0+1+4*6));
 					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[1]+0+2+4*6));
-					cache[0]=_mm256_sub_epi16(cache[0], _mm256_add_epi16(N[0], NW[0]));
+					cache[0]=_mm256_sub_epi16(cache[0], _mm256_add_epi16(N[0], NW[0]));//-(N+NW)
 					cache[1]=_mm256_sub_epi16(cache[1], _mm256_add_epi16(N[1], NW[1]));
 					cache[2]=_mm256_sub_epi16(cache[2], _mm256_add_epi16(N[2], NW[2]));
 					L1preds[10*3+0]=_mm256_srai_epi16(cache[0], 2);
@@ -2467,22 +2489,25 @@ int l1_codec(int argc, char **argv)
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH3);
 					mp[1]=_mm256_srai_epi32(mp[1], L1_SH3);
 					mp[2]=_mm256_srai_epi32(mp[2], L1_SH3);
-					mp[3]=_mm256_srai_epi32(mp[3], L1_SH3);
-					mp[4]=_mm256_srai_epi32(mp[4], L1_SH3);
-					mp[5]=_mm256_srai_epi32(mp[5], L1_SH3);
+					mp[3]=_mm256_srai_epi32(mp[3], L1_SH3-16);
+					mp[4]=_mm256_srai_epi32(mp[4], L1_SH3-16);
+					mp[5]=_mm256_srai_epi32(mp[5], L1_SH3-16);
 					//32 -> 16
-					mp[0]=_mm256_slli_epi32(mp[0], 16);
-					mp[1]=_mm256_slli_epi32(mp[1], 16);
-					mp[2]=_mm256_slli_epi32(mp[2], 16);
-					mp[3]=_mm256_slli_epi32(mp[3], 16);
-					mp[4]=_mm256_slli_epi32(mp[4], 16);
-					mp[5]=_mm256_slli_epi32(mp[5], 16);
-					mp[0]=_mm256_srli_epi32(mp[0], 16);
-					mp[1]=_mm256_srli_epi32(mp[1], 16);
-					mp[2]=_mm256_srli_epi32(mp[2], 16);
-					predY=_mm256_or_si256(mp[0], mp[3]);
-					predU=_mm256_or_si256(mp[1], mp[4]);
-					predV=_mm256_or_si256(mp[2], mp[5]);
+					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
+					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
+					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
+					//mp[0]=_mm256_slli_epi32(mp[0], 16);
+					//mp[1]=_mm256_slli_epi32(mp[1], 16);
+					//mp[2]=_mm256_slli_epi32(mp[2], 16);
+					//mp[3]=_mm256_slli_epi32(mp[3], 16);
+					//mp[4]=_mm256_slli_epi32(mp[4], 16);
+					//mp[5]=_mm256_slli_epi32(mp[5], 16);
+					//mp[0]=_mm256_srli_epi32(mp[0], 16);
+					//mp[1]=_mm256_srli_epi32(mp[1], 16);
+					//mp[2]=_mm256_srli_epi32(mp[2], 16);
+					//predY=_mm256_or_si256(mp[0], mp[3]);
+					//predU=_mm256_or_si256(mp[1], mp[4]);
+					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
@@ -2723,6 +2748,15 @@ int l1_codec(int argc, char **argv)
 				W[0]=myuv[0];
 				_mm256_store_si256((__m256i*)rows[0]+0+0+0*6, myuv[0]);//store Y neighbors
 				msyms=_mm256_sub_epi16(myuv[0], predY);//sub pred
+#ifdef SAVE_RESIDUALS
+				{
+					ptrdiff_t idx=imptr-interleaved-isize+(ptrdiff_t)0*NCODERS;
+					short syms2[16];
+					_mm256_storeu_si256((__m256i*)syms2, msyms);
+					for(int k=0;k<16;++k)
+						residuals[idx+k]=(unsigned char)(syms2[k]+128);
+				}
+#endif
 				ecurr[0]=_mm256_xor_si256(_mm256_slli_epi16(msyms, 1), _mm256_srai_epi16(msyms, 15));//ecurr = pack_sign(yuv-pred)
 				msyms=_mm256_sub_epi16(msyms, amin);
 				ctxY=_mm256_slli_epi16(ctxY, 8);
@@ -2737,6 +2771,15 @@ int l1_codec(int argc, char **argv)
 				predU=_mm256_min_epi16(predU, amax);
 
 				msyms=_mm256_sub_epi16(myuv[1], predU);
+#ifdef SAVE_RESIDUALS
+				{
+					ptrdiff_t idx=imptr-interleaved-isize+(ptrdiff_t)1*NCODERS;
+					short syms2[16];
+					_mm256_storeu_si256((__m256i*)syms2, msyms);
+					for(int k=0;k<16;++k)
+						residuals[idx+k]=(unsigned char)(syms2[k]+128);
+				}
+#endif
 				ecurr[1]=_mm256_xor_si256(_mm256_slli_epi16(msyms, 1), _mm256_srai_epi16(msyms, 15));
 				msyms=_mm256_sub_epi16(msyms, amin);
 				ctxU=_mm256_add_epi16(ctxU, mctxuoffset);
@@ -2756,6 +2799,15 @@ int l1_codec(int argc, char **argv)
 				predV=_mm256_min_epi16(predV, amax);
 
 				msyms=_mm256_sub_epi16(myuv[2], predV);
+#ifdef SAVE_RESIDUALS
+				{
+					ptrdiff_t idx=imptr-interleaved-isize+(ptrdiff_t)2*NCODERS;
+					short syms2[16];
+					_mm256_storeu_si256((__m256i*)syms2, msyms);
+					for(int k=0;k<16;++k)
+						residuals[idx+k]=(unsigned char)(syms2[k]+128);
+				}
+#endif
 				ecurr[2]=_mm256_xor_si256(_mm256_slli_epi16(msyms, 1), _mm256_srai_epi16(msyms, 15));
 				msyms=_mm256_sub_epi16(msyms, amin);
 				ctxV=_mm256_add_epi16(ctxV, mctxvoffset);
@@ -2765,7 +2817,7 @@ int l1_codec(int argc, char **argv)
 				_mm256_store_si256((__m256i*)ctxptr+2, ctxV);//store V  ctx|residuals		ctxptr+NCODERS*(C*2+R)
 				W[2]=_mm256_sub_epi16(myuv[2], moffset);
 				_mm256_store_si256((__m256i*)rows[0]+0+2+0*6, W[2]);//store V neighbors
-
+#if 1
 				int *pa, *pb, *pc, va, vb, vc;
 				pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 				pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
@@ -2783,6 +2835,7 @@ int l1_codec(int argc, char **argv)
 				pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 				pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 				pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+#endif
 #if 0
 				++hists[syms[0*16+0x0]];
 				++hists[syms[1*16+0x0]];
@@ -2975,7 +3028,7 @@ int l1_codec(int argc, char **argv)
 				W[2]=_mm256_sub_epi16(myuv[2], moffset);//subtract Voffset from V
 				_mm256_store_si256((__m256i*)rows[0]+0+2+0*6, W[2]);//store V neighbors
 			}
-			if(npreds==L1_NPREDS1)//update
+			if(effort==1)//update
 			{
 				__m256i mu[3];
 
@@ -3019,7 +3072,7 @@ int l1_codec(int argc, char **argv)
 					_mm256_store_si256((__m256i*)L1weights+k*6+5, mc[5]);
 				}
 			}
-			else if(npreds==L1_NPREDS2)//update
+			else if(effort==2)//update
 			{
 				__m256i mu[3];
 
@@ -3059,7 +3112,7 @@ int l1_codec(int argc, char **argv)
 					_mm256_store_si256((__m256i*)L1weights+k*6+5, mc[5]);
 				}
 			}
-			else if(npreds==L1_NPREDS3)//update
+			else if(effort==3)//update
 			{
 				__m256i mu[3];
 
@@ -3161,7 +3214,7 @@ int l1_codec(int argc, char **argv)
 	printf("Coeff %8d ~ %8d\n", cmin, cmax);
 	printf("Bias  %8d ~ %8d\n", bmin, bmax);
 #endif
-	if(npreds)
+	if(effort)
 		_mm_free(L1state);
 	if(fwd)//all rANS encoding is bwd-bwd
 	{
@@ -3389,7 +3442,7 @@ int l1_codec(int argc, char **argv)
 			csize2+=fwrite("32", 1, 2, fdst);
 			csize2+=fwrite(&iw, 1, 4, fdst);
 			csize2+=fwrite(&ih, 1, 4, fdst);
-			int flags=bestrct<<2|(effort&3);
+			int flags=bestrct<<2|effort;
 			csize2+=fwrite(&flags, 1, 1, fdst);
 			csize2+=fwrite(&dist, 1, 1, fdst);
 #ifdef _DEBUG
@@ -3419,6 +3472,32 @@ int l1_codec(int argc, char **argv)
 		}
 		free(hists);
 		free(rhist);
+#ifdef SAVE_RESIDUALS
+		{
+			unsigned char *result=(unsigned char*)malloc(usize);
+			if(!result)
+			{
+				LOG_ERROR("Alloc error");
+				return;
+			}
+			memset(result, -128, usize);
+			interleave_blocks_inv(residuals, iw, ih, result);
+			{
+				const char fn[]="20250603_0628PM.PPM";
+				FILE *fdst2=fopen(fn, "wb");
+				if(!fdst2)
+				{
+					LOG_ERROR("Cannot open \"%s\" for writing", fn);
+					return;
+				}
+				fprintf(fdst2, "P6\n%d %d\n255\n", iw, ih);
+				fwrite(result, 1, usize, fdst2);
+				fclose(fdst2);
+			}
+			free(residuals);
+			free(result);
+		}
+#endif
 	}
 	else
 	{
@@ -3457,7 +3536,7 @@ int l1_codec(int argc, char **argv)
 #endif
 #ifdef PROFILE_TIME
 #ifdef __GNUC__
-	if(effort&4)
+	if(profile)
 #endif
 		prof_print(usize);
 #endif
