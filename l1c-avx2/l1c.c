@@ -38,7 +38,7 @@ static const char file[]=__FILE__;
 #define L1_NPREDS3 11
 #define L1_SH1 15	//L1_SH1 <= 16
 #define L1_SH2 17
-#define L1_SH3 18
+#define L1_SH3 17
 
 //3*17+3=54 contexts
 #define GRBITS 3
@@ -308,8 +308,8 @@ typedef enum _RCTInfoIdx
 
 //	II_COEFF_Y_SUB_U,
 //	II_COEFF_Y_SUB_V,
-//	II_COEFF_U_SUB_V_NBLI,
-//	II_COEFF_V_SUB_U_NBLI,
+//	II_COEFF_U_SUB_V2,
+//	II_COEFF_V_SUB_U2,
 
 	II_COUNT,
 } RCTInfoIdx;
@@ -1835,7 +1835,7 @@ int l1_codec(int argc, char **argv)
 		if(!residuals)
 		{
 			LOG_ERROR("Alloc error");
-			return;
+			return 1;
 		}
 		memset(residuals, 0, isize);
 	}
@@ -1962,6 +1962,12 @@ int l1_codec(int argc, char **argv)
 				ctxV=_mm256_min_epi16(ctxV, mctxmax);
 			}
 			{
+				const int borderW=3;
+				const int borderN=3;
+				const int borderE=3;
+				int cond_cg=(unsigned)(kx-3*NCODERS*borderW)>=(unsigned)(ixbytes-3*NCODERS*(borderW+borderE))
+					||(unsigned)(ky-borderN)>=(unsigned)(blockh-borderN);
+				__m256i mcg[3];
 				__m256i ymin=_mm256_min_epi16(N[0], W[0]);
 				__m256i ymax=_mm256_max_epi16(N[0], W[0]);
 				__m256i umin=_mm256_min_epi16(N[1], W[1]);
@@ -1974,6 +1980,9 @@ int l1_codec(int argc, char **argv)
 				predY=_mm256_sub_epi16(predY, NW[0]);
 				predU=_mm256_sub_epi16(predU, NW[1]);
 				predV=_mm256_sub_epi16(predV, NW[2]);
+				mcg[0]=predY;
+				mcg[1]=predU;
+				mcg[2]=predV;
 				
 			//	if(ky==blockh-1&&kx==48)//
 			//	{
@@ -1991,16 +2000,16 @@ int l1_codec(int argc, char **argv)
 				{
 					/*
 					effort 1
-					0	N
-					1	W
-					2	NW
-					3	NE
+					0	N+W-NW
+					1	N
+					2	NE
+					3	W
 					*/
 
-					//NW
-					L1preds[0*3+0]=NW[0];
-					L1preds[0*3+1]=NW[1];
-					L1preds[0*3+2]=NW[2];
+					//N+W-NW
+					L1preds[0*3+0]=predY;
+					L1preds[0*3+1]=predU;
+					L1preds[0*3+2]=predV;
 
 					//N
 					L1preds[1*3+0]=N[0];
@@ -2064,10 +2073,10 @@ int l1_codec(int argc, char **argv)
 
 					__m256i rcon=_mm256_set1_epi32(1<<L1_SH1>>1);
 					mp[0]=_mm256_add_epi32(mp[0], rcon);//rounding to nearest
-					mp[3]=_mm256_add_epi32(mp[3], rcon);
 					mp[1]=_mm256_add_epi32(mp[1], rcon);
-					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[2]=_mm256_add_epi32(mp[2], rcon);
+					mp[3]=_mm256_add_epi32(mp[3], rcon);
+					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[5]=_mm256_add_epi32(mp[5], rcon);
 
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH1);
@@ -2080,39 +2089,30 @@ int l1_codec(int argc, char **argv)
 					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
 					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
 					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
-					//mp[0]=_mm256_slli_epi32(mp[0], 16);
-					//mp[1]=_mm256_slli_epi32(mp[1], 16);
-					//mp[2]=_mm256_slli_epi32(mp[2], 16);
-					//mp[3]=_mm256_slli_epi32(mp[3], 16);
-					//mp[4]=_mm256_slli_epi32(mp[4], 16);
-					//mp[5]=_mm256_slli_epi32(mp[5], 16);
-					//mp[0]=_mm256_srli_epi32(mp[0], 16);
-					//mp[1]=_mm256_srli_epi32(mp[1], 16);
-					//mp[2]=_mm256_srli_epi32(mp[2], 16);
-					//predY=_mm256_or_si256(mp[0], mp[3]);
-					//predU=_mm256_or_si256(mp[1], mp[4]);
-					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
-					t[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
-					t[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
-					t[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
-					ymin=_mm256_min_epi16(ymin, t[0]);
-					ymax=_mm256_max_epi16(ymax, t[0]);
-					umin=_mm256_min_epi16(umin, t[1]);
-					umax=_mm256_max_epi16(umax, t[1]);
-					vmin=_mm256_min_epi16(vmin, t[2]);
-					vmax=_mm256_max_epi16(vmax, t[2]);
-					//t[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE
-					//t[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
-					//t[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
-					//ymin=_mm256_min_epi16(ymin, t[0]);
-					//ymax=_mm256_max_epi16(ymax, t[0]);
-					//umin=_mm256_min_epi16(umin, t[1]);
-					//umax=_mm256_max_epi16(umax, t[1]);
-					//vmin=_mm256_min_epi16(vmin, t[2]);
-					//vmax=_mm256_max_epi16(vmax, t[2]);
+					if(!cond_cg)
+					{
+						t[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
+						t[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
+						t[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
+						ymin=_mm256_min_epi16(ymin, t[0]);
+						ymax=_mm256_max_epi16(ymax, t[0]);
+						umin=_mm256_min_epi16(umin, t[1]);
+						umax=_mm256_max_epi16(umax, t[1]);
+						vmin=_mm256_min_epi16(vmin, t[2]);
+						vmax=_mm256_max_epi16(vmax, t[2]);
+						t[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE
+						t[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
+						t[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
+						ymin=_mm256_min_epi16(ymin, t[0]);
+						ymax=_mm256_max_epi16(ymax, t[0]);
+						umin=_mm256_min_epi16(umin, t[1]);
+						umax=_mm256_max_epi16(umax, t[1]);
+						vmin=_mm256_min_epi16(vmin, t[2]);
+						vmax=_mm256_max_epi16(vmax, t[2]);
+					}
 				}
 				else if(effort==2)
 				{
@@ -2262,10 +2262,10 @@ int l1_codec(int argc, char **argv)
 					}
 					__m256i rcon=_mm256_set1_epi32(1<<L1_SH2>>1);
 					mp[0]=_mm256_add_epi32(mp[0], rcon);//rounding to nearest
-					mp[3]=_mm256_add_epi32(mp[3], rcon);
 					mp[1]=_mm256_add_epi32(mp[1], rcon);
-					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[2]=_mm256_add_epi32(mp[2], rcon);
+					mp[3]=_mm256_add_epi32(mp[3], rcon);
+					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[5]=_mm256_add_epi32(mp[5], rcon);
 
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH2);
@@ -2278,39 +2278,30 @@ int l1_codec(int argc, char **argv)
 					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
 					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
 					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
-					//mp[0]=_mm256_slli_epi32(mp[0], 16);
-					//mp[1]=_mm256_slli_epi32(mp[1], 16);
-					//mp[2]=_mm256_slli_epi32(mp[2], 16);
-					//mp[3]=_mm256_slli_epi32(mp[3], 16);
-					//mp[4]=_mm256_slli_epi32(mp[4], 16);
-					//mp[5]=_mm256_slli_epi32(mp[5], 16);
-					//mp[0]=_mm256_srli_epi32(mp[0], 16);
-					//mp[1]=_mm256_srli_epi32(mp[1], 16);
-					//mp[2]=_mm256_srli_epi32(mp[2], 16);
-					//predY=_mm256_or_si256(mp[0], mp[3]);
-					//predU=_mm256_or_si256(mp[1], mp[4]);
-					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
-					cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
-					cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
-					cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
-					ymin=_mm256_min_epi16(ymin, cache[0]);
-					ymax=_mm256_max_epi16(ymax, cache[0]);
-					umin=_mm256_min_epi16(umin, cache[1]);
-					umax=_mm256_max_epi16(umax, cache[1]);
-					vmin=_mm256_min_epi16(vmin, cache[2]);
-					vmax=_mm256_max_epi16(vmax, cache[2]);
-					cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE	crisp DIV2K -0.18%, noisy GDCC +0.13%
-					cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
-					cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
-					ymin=_mm256_min_epi16(ymin, cache[0]);
-					ymax=_mm256_max_epi16(ymax, cache[0]);
-					umin=_mm256_min_epi16(umin, cache[1]);
-					umax=_mm256_max_epi16(umax, cache[1]);
-					vmin=_mm256_min_epi16(vmin, cache[2]);
-					vmax=_mm256_max_epi16(vmax, cache[2]);
+					if(!cond_cg)
+					{
+						cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
+						cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
+						cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
+						ymin=_mm256_min_epi16(ymin, cache[0]);
+						ymax=_mm256_max_epi16(ymax, cache[0]);
+						umin=_mm256_min_epi16(umin, cache[1]);
+						umax=_mm256_max_epi16(umax, cache[1]);
+						vmin=_mm256_min_epi16(vmin, cache[2]);
+						vmax=_mm256_max_epi16(vmax, cache[2]);
+						cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE	crisp DIV2K -0.18%, noisy GDCC +0.13%
+						cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
+						cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
+						ymin=_mm256_min_epi16(ymin, cache[0]);
+						ymax=_mm256_max_epi16(ymax, cache[0]);
+						umin=_mm256_min_epi16(umin, cache[1]);
+						umax=_mm256_max_epi16(umax, cache[1]);
+						vmin=_mm256_min_epi16(vmin, cache[2]);
+						vmax=_mm256_max_epi16(vmax, cache[2]);
+					}
 				}
 				else if(effort==3)
 				{
@@ -2398,7 +2389,7 @@ int l1_codec(int argc, char **argv)
 					L1preds[9*3+1]=_mm256_sub_epi16(cache[1], _mm256_load_si256((__m256i*)rows[2]+0+1+1*6));
 					L1preds[9*3+2]=_mm256_sub_epi16(cache[2], _mm256_load_si256((__m256i*)rows[2]+0+2+1*6));
 					
-					//(WWWW+WWW+NNN+NEE+NEEE+NEEEE-(NW+N))>>2
+					//(WWWW+WWW+NNN+NNEE+NEEE+NEEEE-(N+W))>>2
 #if 1
 					cache[0]=_mm256_load_si256((__m256i*)rows[0]+0+0-4*6);//WWWW
 					cache[1]=_mm256_load_si256((__m256i*)rows[0]+0+1-4*6);
@@ -2409,18 +2400,18 @@ int l1_codec(int argc, char **argv)
 					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[3]+0+0+0*6));//+NNN
 					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[3]+0+1+0*6));
 					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[3]+0+2+0*6));
-					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[1]+0+0+2*6));//+NEE
-					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[1]+0+1+2*6));
-					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[1]+0+2+2*6));
+					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[2]+0+0+2*6));//+NNEE
+					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[2]+0+1+2*6));
+					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[2]+0+2+2*6));
 					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[1]+0+0+3*6));//+NEEE
 					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[1]+0+1+3*6));
 					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[1]+0+2+3*6));
 					cache[0]=_mm256_add_epi16(cache[0], _mm256_load_si256((__m256i*)rows[1]+0+0+4*6));//+NEEEE
 					cache[1]=_mm256_add_epi16(cache[1], _mm256_load_si256((__m256i*)rows[1]+0+1+4*6));
 					cache[2]=_mm256_add_epi16(cache[2], _mm256_load_si256((__m256i*)rows[1]+0+2+4*6));
-					cache[0]=_mm256_sub_epi16(cache[0], _mm256_add_epi16(N[0], NW[0]));//-(N+NW)
-					cache[1]=_mm256_sub_epi16(cache[1], _mm256_add_epi16(N[1], NW[1]));
-					cache[2]=_mm256_sub_epi16(cache[2], _mm256_add_epi16(N[2], NW[2]));
+					cache[0]=_mm256_sub_epi16(cache[0], _mm256_add_epi16(N[0], W[0]));//-(N+W)
+					cache[1]=_mm256_sub_epi16(cache[1], _mm256_add_epi16(N[1], W[1]));
+					cache[2]=_mm256_sub_epi16(cache[2], _mm256_add_epi16(N[2], W[2]));
 					L1preds[10*3+0]=_mm256_srai_epi16(cache[0], 2);
 					L1preds[10*3+1]=_mm256_srai_epi16(cache[1], 2);
 					L1preds[10*3+2]=_mm256_srai_epi16(cache[2], 2);
@@ -2480,10 +2471,10 @@ int l1_codec(int argc, char **argv)
 					}
 					__m256i rcon=_mm256_set1_epi32(1<<L1_SH3>>1);
 					mp[0]=_mm256_add_epi32(mp[0], rcon);//rounding to nearest
-					mp[3]=_mm256_add_epi32(mp[3], rcon);
 					mp[1]=_mm256_add_epi32(mp[1], rcon);
-					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[2]=_mm256_add_epi32(mp[2], rcon);
+					mp[3]=_mm256_add_epi32(mp[3], rcon);
+					mp[4]=_mm256_add_epi32(mp[4], rcon);
 					mp[5]=_mm256_add_epi32(mp[5], rcon);
 
 					mp[0]=_mm256_srai_epi32(mp[0], L1_SH3);
@@ -2496,43 +2487,40 @@ int l1_codec(int argc, char **argv)
 					predY=_mm256_blend_epi16(mp[0], mp[3], 0xAA);
 					predU=_mm256_blend_epi16(mp[1], mp[4], 0xAA);
 					predV=_mm256_blend_epi16(mp[2], mp[5], 0xAA);
-					//mp[0]=_mm256_slli_epi32(mp[0], 16);
-					//mp[1]=_mm256_slli_epi32(mp[1], 16);
-					//mp[2]=_mm256_slli_epi32(mp[2], 16);
-					//mp[3]=_mm256_slli_epi32(mp[3], 16);
-					//mp[4]=_mm256_slli_epi32(mp[4], 16);
-					//mp[5]=_mm256_slli_epi32(mp[5], 16);
-					//mp[0]=_mm256_srli_epi32(mp[0], 16);
-					//mp[1]=_mm256_srli_epi32(mp[1], 16);
-					//mp[2]=_mm256_srli_epi32(mp[2], 16);
-					//predY=_mm256_or_si256(mp[0], mp[3]);
-					//predU=_mm256_or_si256(mp[1], mp[4]);
-					//predV=_mm256_or_si256(mp[2], mp[5]);
 
 
 					//loosen pred range
-					cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
-					cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
-					cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
-					ymin=_mm256_min_epi16(ymin, cache[0]);
-					ymax=_mm256_max_epi16(ymax, cache[0]);
-					umin=_mm256_min_epi16(umin, cache[1]);
-					umax=_mm256_max_epi16(umax, cache[1]);
-					vmin=_mm256_min_epi16(vmin, cache[2]);
-					vmax=_mm256_max_epi16(vmax, cache[2]);
-					cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE	crisp DIV2K -0.18%, noisy GDCC +0.13%
-					cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
-					cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
-					ymin=_mm256_min_epi16(ymin, cache[0]);
-					ymax=_mm256_max_epi16(ymax, cache[0]);
-					umin=_mm256_min_epi16(umin, cache[1]);
-					umax=_mm256_max_epi16(umax, cache[1]);
-					vmin=_mm256_min_epi16(vmin, cache[2]);
-					vmax=_mm256_max_epi16(vmax, cache[2]);
+					if(!cond_cg)
+					{
+						cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+1*6);//NE
+						cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+1*6);
+						cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+1*6);
+						ymin=_mm256_min_epi16(ymin, cache[0]);
+						ymax=_mm256_max_epi16(ymax, cache[0]);
+						umin=_mm256_min_epi16(umin, cache[1]);
+						umax=_mm256_max_epi16(umax, cache[1]);
+						vmin=_mm256_min_epi16(vmin, cache[2]);
+						vmax=_mm256_max_epi16(vmax, cache[2]);
+						cache[0]=_mm256_load_si256((__m256i*)rows[1]+0+0+3*6);//NEEE	crisp DIV2K -0.18%, noisy GDCC +0.13%
+						cache[1]=_mm256_load_si256((__m256i*)rows[1]+0+1+3*6);
+						cache[2]=_mm256_load_si256((__m256i*)rows[1]+0+2+3*6);
+						ymin=_mm256_min_epi16(ymin, cache[0]);
+						ymax=_mm256_max_epi16(ymax, cache[0]);
+						umin=_mm256_min_epi16(umin, cache[1]);
+						umax=_mm256_max_epi16(umax, cache[1]);
+						vmin=_mm256_min_epi16(vmin, cache[2]);
+						vmax=_mm256_max_epi16(vmax, cache[2]);
+					}
 				}
 				predYUV0[0]=predY;
 				predYUV0[1]=predU;
 				predYUV0[2]=predV;
+				if(cond_cg)
+				{
+					predY=mcg[0];
+					predU=mcg[1];
+					predV=mcg[2];
+				}
 
 				predY=_mm256_max_epi16(predY, ymin);
 				predU=_mm256_max_epi16(predU, umin);
@@ -3478,7 +3466,7 @@ int l1_codec(int argc, char **argv)
 			if(!result)
 			{
 				LOG_ERROR("Alloc error");
-				return;
+				return 1;
 			}
 			memset(result, -128, usize);
 			interleave_blocks_inv(residuals, iw, ih, result);
@@ -3488,7 +3476,7 @@ int l1_codec(int argc, char **argv)
 				if(!fdst2)
 				{
 					LOG_ERROR("Cannot open \"%s\" for writing", fn);
-					return;
+					return 1;
 				}
 				fprintf(fdst2, "P6\n%d %d\n255\n", iw, ih);
 				fwrite(result, 1, usize, fdst2);

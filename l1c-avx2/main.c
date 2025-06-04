@@ -155,7 +155,7 @@ int main(int argc, char **argv)
 		argv[0],
 		srcfn,
 		tmpfn,
-		"3",
+		"1",
 	//	"11",//near
 	};
 	const char *decargs[]=
