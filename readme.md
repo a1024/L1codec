@@ -64,4 +64,5 @@ All tests are single-threaded.
 | 431594628 |    181.847 |    6.216 |      4.460 |  130.473 |          55.90 |          28.01 |  png (fPNG + pingo + stb_image.h)	|
 | 850510339 | PPM |
 
-<img src="20250604-2-DIV2K.svg">
+<img src="20250607-1-DIV2K.svg">
+<img src="20250607-2-DIV2K-zoom.svg">
