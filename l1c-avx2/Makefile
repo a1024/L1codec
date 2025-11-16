@@ -16,7 +16,7 @@ LIBS += -lm
 endif
 
 
-l1c-clang:
+l1c:
 	clang $(FLAGS) -mavx2 -mbmi -mlzcnt  l1c.c main.c util.c  -o l1c $(LIBS)
 
 l1c-gcc:
