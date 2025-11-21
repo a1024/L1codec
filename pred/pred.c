@@ -9,7 +9,7 @@
 	#define LOUD
 
 
-#define L1SH 18
+#define L1SH 20
 #if 0
 #define NPREDS 10		//up to 11, otherwise slow
 #define PREDLIST\
@@ -495,11 +495,10 @@ void predict(unsigned char *image, int iw, int ih, int *prct, int fwd)
 #undef  PRED
 				};
 				int *currw=weights[kc];
-				int p0=0;
+				int p0=1<<L1SH>>1;
 				for(int k=0;k<NPREDS;++k)
-					p0+=(currw[k]>>8)*preds[k];
-				p0+=1LL<<(L1SH-8)>>1;
-				p0>>=L1SH-8;
+					p0+=currw[k]*preds[k];
+				p0>>=L1SH;
 				int predc=p0;
 				int vmax=N, vmin=W;
 				if(N<W)vmin=N, vmax=W;
