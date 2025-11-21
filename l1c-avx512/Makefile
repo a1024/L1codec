@@ -16,8 +16,8 @@ LIBS += -lm
 endif
 
 
-l1c-clang:
-	clang $(FLAGS) -mavx512f -mavx512bw -mavx512cd -mavx512dq -mevex512 -mavx512vl -mavx512vbmi2 -mbmi -mlzcnt  l1c.c main.c util.c  -o l1cavx512 $(LIBS)
+l1cavx512:
+	clang $(FLAGS) -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl -mavx512vbmi2 -mbmi -mlzcnt  l1c.c main.c util.c  -o l1cavx512 $(LIBS)
 
-l1c-gcc:
-	gcc $(FLAGS) -mavx512f -mavx512bw -mavx512cd -mavx512dq -mevex512 -mavx512vl -mavx512vbmi2 -mbmi -mlzcnt  l1c.c main.c util.c  -o l1cavx512 $(LIBS)
+l1cavx512-gcc:
+	gcc $(FLAGS) -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl -mavx512vbmi2 -mbmi -mlzcnt  l1c.c main.c util.c  -o l1cavx512 $(LIBS)

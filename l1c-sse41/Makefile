@@ -19,8 +19,8 @@ endif
 l1csse41:
 	clang $(FLAGS) -msse4.1  l1c.c main.c util.c  -o l1csse41 $(LIBS)
 
-l1c32:
-	gcc $(FLAGS) -m32 -msse4.1  l1c.c main.c util.c  -o l1c32 $(LIBS)
+l1cx86:
+	gcc $(FLAGS) -m32 -msse4.1  l1c.c main.c util.c  -o l1cx86 $(LIBS)
 
-l1c-gcc:
+l1csse41-gcc:
 	gcc $(FLAGS) -msse4.1  l1c.c main.c util.c  -o l1csse41 $(LIBS)
