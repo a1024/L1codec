@@ -36,11 +36,12 @@ r: Reconstruct
 
 ## Benchmarks
 
+Encode time (sec) vs size (bytes).
+All tests are single-threaded.
+
 ### Dataset: DIV2K validation (100 images)
 
 CPU: Intel i5-1145G7
-
-All tests are single-threaded.
 
 | size      | Enc sec    | Dec sec  | Enc MB/s   | Dec MB/s | Enc Max Mem MB | Dec Max Mem MB | Codec |
 |----------:|-----------:|---------:|-----------:|---------:|---------------:|---------------:|-------|
@@ -70,7 +71,5 @@ All tests are single-threaded.
 ### Dataset: GDCC (100 images, 1000452004 bytes)
 
 CPU: Intel i7-13700KF
-
-All tests are single-threaded.
 
 <img src="20251121-3-GDCC.svg">
