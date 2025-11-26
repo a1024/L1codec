@@ -13,7 +13,7 @@ To build use GNU Make or create MSVC2022 CMake projects.
 
 ## Command-line
 ### Encoding
-`l1c.exe  input.ppm  output.l1c  [effort]`
+`l1c.exe  input.ppm  output.l1c  [effort]  [dist]`
 
 Only 24-bit PPM images are supported.
 
