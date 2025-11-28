@@ -3,7 +3,15 @@
 Low-complexity lossless image compression software.
 Uses a novel weighted predictor based on L1 loss and a novel causal RCT.
 
-Versions: SSE4.1, AVX2 and AVX512. The AVX512 version is currently incompatible with the rest.
+### Publications:
+- "L1-based prediction for lossless image compression." IEEE Signal Processing Letters (2025).
+- "Causal Reversible Color Transform." IEEE Signal Processing Letters (2025).
+
+### Modules & Architectures:
+- SSSE3: i386 / x86_64. Incompatible with others [TODO].
+- SSE4.1: i386 / x86_64.
+- AVX2: Compatible with SSE4.1.
+- AVX512: Incompatible with others [TODO].
 
 In addition, `pred` is a reference source for the novel low-complexity decorrelation system.
 
@@ -12,6 +20,7 @@ Each folder contains a different project.
 To build use GNU Make or create MSVC2022 CMake projects.
 
 ## Command-line
+
 ### Encoding
 `l1c.exe  input.ppm  output.l1c  [effort]  [dist]`
 
