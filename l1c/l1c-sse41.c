@@ -790,7 +790,7 @@ static void interleave_blocks_inv(const uint8_t *interleaved, int iw, int ih, ui
 		}
 	}
 }
-int codec_l1_x86(int argc, char **argv)
+int codec_l1_sse41(int argc, char **argv)
 {
 	const char *srcfn, *dstfn;
 	int effort, dist;

@@ -11,12 +11,14 @@
 #ifdef _MSC_VER
 #include<stdlib.h>
 #endif
-int codec_l1_x86(int argc, char **argv);
+int codec_l1_ssse3(int argc, char **argv);
+int codec_l1_sse41(int argc, char **argv);
 int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
-//	#define CODEC codec_l1_x86
+//	#define CODEC codec_l1_ssse3
+//	#define CODEC codec_l1_sse41
 	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
 
@@ -32,18 +34,20 @@ int ansvalidx=0, ansvalmax=0;
 int main(int argc, char **argv)
 {
 	const char *dstfn=//OVERWRITTEN
-	//	"C:/Projects/datasets/zzz_deletethis.ppm"
-
 		"C:/dataset-a-temp/zzz.ppm"
 	//	"D:/ML/zzz_deletethis.ppm"
+	//	"C:/Projects/datasets/zzz_deletethis.ppm"
+	//	"F:/Projects/zzz.ppm"
 	;
 	const char *tmpfn=//OVERWRITTEN
-	//	"C:/Projects/datasets/zzz_deletethis.l1c"
-		
 		"C:/dataset-a-temp/zzz.l1c"
 	//	"D:/ML/zzz_deletethis.l1c"
+	//	"C:/Projects/datasets/zzz_deletethis.l1c"
+	//	"F:/Projects/zzz.l1c"
 	;
 	const char *srcfn=
+	//	"F:/Projects/dataset-GDCC2020-ppm/photo-01.ppm"
+
 	//	"C:/dataset-a70-ppm/20240816_113656_966.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_abigail-keenan-27293.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_alberto-restifo-4549.ppm"
@@ -52,7 +56,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-CLIC303-ppm/2048x1320_zugr-108.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_zugr-108.ppm"
 	//	"C:/dataset-DIV2K-ppm"
-		"C:/dataset-DIV2K-ppm/0801.ppm"
+	//	"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0805.ppm"
@@ -72,6 +76,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-GDCC2020-ppm/astro-20.ppm"
 	//	"C:/dataset-GDCC2020-ppm/astro-30.ppm"
 	//	"C:/dataset-GDCC2020-ppm/astro-43.ppm"
+		"C:/dataset-GDCC2020-ppm/photo-01.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-03.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-05.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-49.ppm"
@@ -132,6 +137,7 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
+	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-06.ppm"
 	//	"C:/Projects/datasets/dataset-kodak-ppm/kodim23.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
@@ -180,5 +186,12 @@ int main(int argc, char **argv)
 		return 1;
 	if(CODEC(_countof(decargs), (char**)decargs))
 		return 1;
+#if defined _MSC_VER && _MSC_VER<1900
+	{
+		int k;
+		printf("Enter 0 to continue: ");
+		while(!scanf(" %d", &k));
+	}
+#endif
 	return 0;
 }

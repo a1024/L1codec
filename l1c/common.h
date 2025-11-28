@@ -17,7 +17,7 @@
 #ifdef _MSC_VER
 	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
 
-	#define ANS_VAL			//DEBUG
+//	#define ANS_VAL			//DEBUG
 #endif
 
 
@@ -25,6 +25,9 @@
 #ifdef _MSC_VER
 #	define ALIGN(N) __declspec(align(N))
 #	define AWM_INLINE __forceinline static
+#if _MSC_VER<1900
+#define snprintf sprintf_s
+#endif
 #else
 #	define ALIGN(N) __attribute__((aligned(N)))
 #	define AWM_INLINE __attribute__((always_inline)) inline static
@@ -66,7 +69,7 @@ AWM_INLINE int floor_log2_32(uint32_t n)
 	return logn;
 }
 #define FLOOR_LOG2(X)\
-	(sizeof(X)==8?floor_log2_64(X):floor_log2_32(X))
+	(sizeof(X)==8?floor_log2_64(X):floor_log2_32((uint32_t)(X)))
 #endif
 
 
@@ -147,18 +150,31 @@ static int print_timestamp(const char *format)//"%Y-%m-%d_%H%M%S"
 }
 static void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int maxtrials)
 {
+	int brightnessrange=0, dmax0=0, k;
+	static const char increments[]=
+	{
+		//r, g, b
+		+1, -1, +0,
+		-1, +1, +0,
+		+1, +0, -1,
+		-1, +0, +1,
+		+0, +1, -1,
+		+0, -1, +1,
+	};
+
 	unsigned char *data=(unsigned char*)colors;
 	CLAMP2(minbrightness, 0, 765-1);
 	if(maxbrightness<minbrightness+1)
 		maxbrightness=minbrightness+1;
-	int brightnessrange=maxbrightness-minbrightness;
-	int dmax0=brightnessrange*brightnessrange/3>>1;
-	for(int k=0;k<count;++k)
+	brightnessrange=maxbrightness-minbrightness;
+	dmax0=brightnessrange*brightnessrange/3>>1;
+	for(k=0;k<count;++k)
 	{
 		int reject=0, ntrials=0;
 		int bestdist=0, bestcolor=0;
 		do
 		{
+			int rem, dmin;
 			int r0=rand();//at least 15-bit
 			int r1=rand();
 			int r2=rand();
@@ -168,29 +184,22 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 			++ntrials;
 			if((unsigned)(r+g+b-minbrightness)>=(unsigned)brightnessrange)
 			{
+				int t0;
+
 				if(ntrials<maxtrials)
 				{
 					reject=1;
 					continue;
 				}
 				r=g=b=(minbrightness+maxbrightness+3)/6;
-				static const char increments[]=
-				{
-					//r, g, b
-					+1, -1, +0,
-					-1, +1, +0,
-					+1, +0, -1,
-					-1, +0, +1,
-					+0, +1, -1,
-					+0, -1, +1,
-				};
-				int t0=rand();
+				t0=rand();
 				while(t0)
 				{
+					const char *inc;
 					int rem=t0;
 					t0/=6;
 					rem-=t0*6;
-					const char *inc=increments+rem*3;
+					inc=increments+rem*3;
 					if(!(((r+inc[0])|(g+inc[1])|(b+inc[2]))>>8))
 					{
 						r+=inc[0];
@@ -199,11 +208,12 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 					}
 				}
 			}
-			int rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
-			int dmin=0xFFFFFF;// > 3*255*255
+			rem=(r2&127)<<14|(r1&127)<<7|(r0&127);//21 bit
+			dmin=0xFFFFFF;// > 3*255*255
 			{
+				int k2;
 				const unsigned char *p2=(const unsigned char*)data;
-				for(int k2=0;k2<k;++k2)
+				for(k2=0;k2<k;++k2)
 				{
 					int dr=p2[0]-r;
 					int dg=p2[1]-g;
@@ -294,7 +304,7 @@ static void profile_size(const unsigned char *dstbwdptr, const char *msg, ...)
 	{
 		ptrdiff_t diff=prev-dstbwdptr;
 		size+=diff;
-		printf("%10td (%+10td) bytes", size, diff);
+		printf("%10lld (%+10lld) bytes", (int64_t)size, (int64_t)diff);
 		if(msg)
 		{
 			va_list args;
@@ -347,8 +357,9 @@ static void prof_print(ptrdiff_t usize)
 	double timesum=0, tmax=0;
 	int prev=0;
 	double csum=0;
+	int k;
 
-	for(int k=0;k<prof_count;++k)
+	for(k=0;k<prof_count;++k)
 	{
 		double t=prof_data[k].t;
 		timesum+=t;
@@ -368,13 +379,14 @@ static void prof_print(ptrdiff_t usize)
 	//}
 
 	printf("|");
-	for(int k=0;k<prof_count;++k)
+	for(k=0;k<prof_count;++k)
 	{
+		int curr, space;
+		int len=0;
 		SpeedProfilerInfo *info=prof_data+k;
 		csum+=info->t;
-		int curr=(int)(csum*1000/scale);//fixed scale
-		int space=curr-prev;
-		int len=0;
+		curr=(int)(csum*1000/scale);//fixed scale
+		space=curr-prev;
 		if(info->msg)
 			len=(int)strlen(info->msg);
 		if(space>2047)//printf("%*s", HUGE, ""); CRASHES
@@ -406,15 +418,15 @@ static void prof_print(ptrdiff_t usize)
 	}
 	printf("\n");
 
-	for(int k=0;k<prof_count;++k)
+	for(k=0;k<prof_count;++k)
 	{
 		SpeedProfilerInfo *info=prof_data+k;
 		printf("%16.7lf ms %8.4lf%% ", info->t*1000, 100.*info->t/timesum);
 		if(info->size)
-			printf(" %16.6lf MB/s %16.6lf ms/MB %10td bytes "
+			printf(" %16.6lf MB/s %16.6lf ms/MB %10lld bytes "
 				, info->size/(info->t*1024*1024)
 				, info->t*1024*1024*1000/info->size
-				, info->size
+				, (uint64_t)info->size
 			);
 		//if(info->msg)
 		//	printf("%s", info->msg);
@@ -707,19 +719,19 @@ static void* ansval_ptrguard(const void *start, const void *end, const void *ptr
 	if(problems[0]||problems[1]||problems[2])
 	{
 		printf("\nOOB\n");
-		printf("  inc     %+16td bytes\n", nbytes);
+		printf("  inc     %+16lld bytes\n", (uint64_t)nbytes);
 		printf("  start   %016zd  %16d\n", istart, 0);
 		if(nbytes<0)
 		{
-			printf("  after   %016zd  %16td%s\n", ip2, ip2-istart, problems[2]?"  <-":"");
-			printf("  before  %016zd  %16td%s\n", ip1, ip1-istart, problems[1]?"  <-":"");
+			printf("  after   %016lld  %16lld%s\n", (uint64_t)ip2, (uint64_t)(ip2-istart), problems[2]?"  <-":"");
+			printf("  before  %016lld  %16lld%s\n", (uint64_t)ip1, (uint64_t)(ip1-istart), problems[1]?"  <-":"");
 		}
 		else
 		{
-			printf("  before  %016zd  %16td%s\n", ip1, ip1-istart, problems[1]?"  <-":"");
-			printf("  after   %016zd  %16td%s\n", ip2, ip2-istart, problems[2]?"  <-":"");
+			printf("  before  %016lld  %16lld%s\n", (uint64_t)ip1, (uint64_t)(ip1-istart), problems[1]?"  <-":"");
+			printf("  after   %016lld  %16lld%s\n", (uint64_t)ip2, (uint64_t)(ip2-istart), problems[2]?"  <-":"");
 		}
-		printf("  end     %016zd  %16td%s\n", iend, size, problems[0]?"  <-":"");
+		printf("  end     %016lld  %16lld%s\n", (uint64_t)iend, (uint64_t)size, problems[0]?"  <-":"");
 		CRASH("\n");
 		return 0;
 	}
@@ -851,11 +863,13 @@ AWM_INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
 }
 AWM_INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
 {
+	int sym;
+
 #ifdef _DEBUG
 	if(outbits>BITPACKERMAX)
 		CRASH("BitPacker outbits %d", outbits);
 #endif
-	int sym=ec->state&((1ULL<<outbits)-1);
+	sym=ec->state&((1ULL<<outbits)-1);
 
 	//pop outbits then renorm
 #ifdef ANS_VAL
@@ -890,6 +904,9 @@ typedef struct _rANS_SIMD_SymInfo	//16 bytes/level	4KB/ctx = 1<<12 bytes
 } rANS_SIMD_SymInfo;
 static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypassmask, int ctxidx, int sse41)
 {
+#ifdef ESTIMATE_SIZE
+	int count0=0, sum0=0;
+#endif
 	int sum=0, count=0, ks, rare;
 	for(ks=0;ks<256;++ks)
 	{
@@ -900,7 +917,7 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 	rare=sum<12*256/8;
 	*bypassmask|=(uint64_t)rare<<ctxidx;
 #ifdef ESTIMATE_SIZE
-	int count0=count, sum0=sum;
+	count0=count; sum0=sum;
 #endif
 	if(rare)
 	{
@@ -944,92 +961,77 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 		//}
 	}
 #ifdef ESTIMATE_SIZE
-	double e=sum0;
-	if(count==count0)
 	{
-		double norm=1./0x1000;
-		e=0;
-		for(int ks=0;ks<256;++ks)//estimate
+		double e=sum0;
+		if(count==count0)
 		{
-			int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
-			if(freq)
+			double norm=1./0x1000;
+			int ks;
+			e=0;
+			for(ks=0;ks<256;++ks)//estimate
 			{
-				double p=freq*norm;
-				e-=p*log2(p);
+				int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
+				if(freq)
+				{
+					double p=freq*norm;
+					e-=p*log(p);
+				}
+				if(e!=e)
+					CRASH("");
 			}
-			if(e!=e)
-				CRASH("");
+			e*=sum/(8.*M_LN2);
 		}
-		e*=sum/8.;
-	}
-	if(ctxidx&&!(ctxidx%NCTX))
+		if(ctxidx&&!(ctxidx%NCTX))
+			printf("\n");
+		printf("%c  ctx %3d  %12.2lf / %9d bytes%10.2lf%%  %3d %s",
+			ctxidx<3*NCTX?"YUV"[ctxidx/NCTX]:"yuv"[ctxidx-3*NCTX],
+			ctxidx, e, sum0, 100.*e/sum0, count0, count==count0?"levels":"bypass"
+		);
+		if(count==count0&&count<256)
+		{
+			int fmax, ks;
+
+			printf(" %3d", count);
+			fmax=0;
+			for(ks=0;ks<256;++ks)
+			{
+				int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
+				if(fmax<freq)
+					fmax=freq;
+			}
+			for(ks=0;ks<256;++ks)
+			{
+				int freq, shade;
+
+				freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
+				if(!(ks&15))
+					printf(" ");
+
+				shade=48+freq*(255-48)/fmax;
+				colorprintf(shade<<16|shade<<8|shade, freq?0x808080:COLORPRINTF_BK_DEFAULT, "%c", "0123456789ABCDEF"[ks&15]);
+				//int shade=freq*255/fmax;
+				//colorprintf(freq?0xFFFFFF:0x808080, shade<<16|0<<8|shade, "%c", "0123456789ABCDEF"[ks&15]);
+
+				//printf("%c", freq?"0123456789ABCDEF"[ks&15]:'-');
+			}
+		}
 		printf("\n");
-	printf("%c  ctx %3d  %12.2lf / %9d bytes%10.2lf%%  %3d %s",
-		ctxidx<3*NCTX?"YUV"[ctxidx/NCTX]:"yuv"[ctxidx-3*NCTX],
-		ctxidx, e, sum0, 100.*e/sum0, count0, count==count0?"levels":"bypass"
-	);
-	if(count==count0&&count<256)
-	{
-		printf(" %3d", count);
-		int fmax=0;
-		for(int ks=0;ks<256;++ks)
-		{
-			int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
-			if(fmax<freq)
-				fmax=freq;
-		}
-		for(int ks=0;ks<256;++ks)
-		{
-			int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
-			if(!(ks&15))
-				printf(" ");
-
-			int shade=48+freq*(255-48)/fmax;
-			colorprintf(shade<<16|shade<<8|shade, freq?0x808080:COLORPRINTF_BK_DEFAULT, "%c", "0123456789ABCDEF"[ks&15]);
-			//int shade=freq*255/fmax;
-			//colorprintf(freq?0xFFFFFF:0x808080, shade<<16|0<<8|shade, "%c", "0123456789ABCDEF"[ks&15]);
-
-			//printf("%c", freq?"0123456789ABCDEF"[ks&15]:'-');
-		}
-#if 0
-		int printmissing=count>128, printcount=printmissing?256-count:count;
-		if(printmissing)
-			printf(" MISSING %3d: ", printcount);
-		else
-			printf("            : ");
-		//printf(" %3d %-7s: ", printcount, printmissing?"MISSING":"       ");
-		for(int ks=0, printed=0;ks<256;++ks)
-		{
-			int ks2=((ks>>1^-(ks&1))+128)&255;
-			int freq=(ks2<256-1?hist[ks2+1]:1<<PROBBITS)-hist[ks2];
-			if(printmissing!=(freq!=0))
-			{
-				printf(" %02X", ks2);
-				//++printed;
-				//if(printed&1)
-				//	printf("%02x", ks2);
-				//else
-				//	printf("%02X", ks2);
-				//if(printed>=90)
-				//{
-				//	printf("...%+4d more", printcount-printed);
-				//	break;
-				//}
-			}
-		}
-#endif
 	}
-	printf("\n");
-#if 0
-	if(ctxidx==26)
+#ifdef DEBUG_HIST
+	if(ctxidx==0)
 	{
 		const int amplitude=512;
-		printf("Context %d: (1 star = %d steps)\n", ctxidx, 4096/amplitude);
-		for(int ks=0;ks<256;++ks)
+		int ks;
+
+		printf("Context %d: (1 star = %d steps)\n", ctxidx, (1<<PROBBITS)/amplitude);
+		for(ks=0;ks<256;++ks)
 		{
-			int freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks], nstars=freq*amplitude>>PROBBITS;
+			int freq, nstars, k;
+
+			freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks];
+			nstars=freq*amplitude>>PROBBITS;
 			printf("%3d %4d ", ks, freq);
-			for(int k=0;k<nstars;++k)
+			for(k=0;k<nstars;++k)
 				printf("*");
 			printf("\n");
 		}
@@ -1225,6 +1227,25 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 		for(ks2=cdf;ks2<next;++ks2, val+=1<<8)
 			CDF2sym[ks2]=val;
 	}
+#ifdef DEBUG_HIST
+	if(ctxidx==DEBUG_HIST)
+	{
+		const int amplitude=512;
+		int ks;
+
+		printf("Context %d: (1 star = %d steps)\n", ctxidx, (1<<PROBBITS)/amplitude);
+		for(ks=0;ks<256;++ks)
+		{
+			int freq, nstars, k;
+
+			freq=(ks<256-1?hist[ks+1]:1<<PROBBITS)-hist[ks], nstars=freq*amplitude>>PROBBITS;
+			printf("%3d %4d ", ks, freq);
+			for(k=0;k<nstars;++k)
+				printf("*");
+			printf("\n");
+		}
+	}
+#endif
 }
 static void save_ppm(const char *fn, const uint8_t *image, int iw, int ih)
 {
