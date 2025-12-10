@@ -20,6 +20,7 @@ endif
 
 
 x64:	l1c-sse41  l1c-avx2  l1c-avx512
+#l1c-sse41-linux  l1c-avx2-linux
 x86:	l1c-ssse3-x86  l1c-sse41-x86
 
 
@@ -31,6 +32,13 @@ l1c-sse41:	l1c-sse41.c
 
 l1c-sse41-x86:	l1c-sse41.c
 	$(CC) $(CFLAGS) -m32 -msse4.1 -Dcodec_l1_sse41=main l1c-sse41.c -o l1c-sse41-x86 $(LIBS)
+
+
+l1c-sse41-linux:	l1c-sse41.c
+	$(CC) $(CFLAGS) --target=x86_64-pc-linux-gnu -msse4.1 -Dcodec_l1_sse41=main l1c-sse41.c -o l1c-sse41 $(LIBS)
+
+l1c-avx2-linux:		l1c-avx2.c
+	$(CC) $(CFLAGS) --target=x86_64-pc-linux-gnu -mavx2 -mlzcnt -Dcodec_l1_avx2=main l1c-avx2.c -o l1c-avx2-linux $(LIBS)
 
 
 #incompatible with the rest	TODO

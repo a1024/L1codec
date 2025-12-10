@@ -752,7 +752,6 @@ int codec_l1_avx2(int argc, char **argv)
 		rowstride=3*iw;
 		usize=(ptrdiff_t)3*iw*ih;
 		cap=(ptrdiff_t)4*iw*ih;
-	//	image=(uint8_t*)_mm_malloc(cap+sizeof(__m256i), 0x1000);
 		image=(uint8_t*)malloc(cap+sizeof(__m256i));
 		if(!image)
 		{
