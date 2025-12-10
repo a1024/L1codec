@@ -639,7 +639,8 @@ int codec_l1_avx512(int argc, char **argv)
 		usize2=info.st_size;
 	}
 #endif
-	prof_checkpoint(0, 0);
+	prof_timestamp=time_sec();
+	//prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");

@@ -854,6 +854,8 @@ int codec_l1_sse41(int argc, char **argv)
 		);
 		return 1;
 	}
+	prof_timestamp=time_sec();
+	//prof_checkpoint(0, 0);
 	srcfn=argv[1];
 	dstfn=argv[2];
 	effort=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]);
@@ -862,7 +864,6 @@ int codec_l1_sse41(int argc, char **argv)
 	dist=argc<5?1:atoi(argv[4]);
 	if(dist>1)
 		CLAMP2(dist, 4, 31);
-	prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");

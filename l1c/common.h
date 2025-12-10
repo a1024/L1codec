@@ -335,7 +335,7 @@ static int prof_count=0;
 static void prof_checkpoint(ptrdiff_t size, const char *msg)
 {
 	double t2=time_sec();
-	if(prof_timestamp)
+	//if(prof_timestamp)
 	{
 		SpeedProfilerInfo *info=prof_data+prof_count++;
 		if(prof_count>=PROF_CAP)

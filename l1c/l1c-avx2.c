@@ -642,7 +642,7 @@ int codec_l1_avx2(int argc, char **argv)
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
 		printf(
-			"Usage: \"%s\"  input  output  [Effort]  [Dist]    To encode/decode.\n"
+			"Usage:  \"%s\"  input  output  [Effort]  [Dist]    To encode/decode.\n"
 			"  Effort  =  0 CG / 1~3 L1 | 4 Profiler.\n"
 			"  Dist    =  lossy distortion. 4 <= Dist <= 31.\n"
 			"Built on %s %s\n"
@@ -668,7 +668,8 @@ int codec_l1_avx2(int argc, char **argv)
 		usize2=info.st_size;
 	}
 #endif
-	prof_checkpoint(0, 0);
+	prof_timestamp=time_sec();
+	//prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");
