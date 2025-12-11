@@ -335,18 +335,15 @@ static int prof_count=0;
 static void prof_checkpoint(ptrdiff_t size, const char *msg)
 {
 	double t2=time_sec();
-	//if(prof_timestamp)
+	SpeedProfilerInfo *info=prof_data+prof_count++;
+	if(prof_count>=PROF_CAP)
 	{
-		SpeedProfilerInfo *info=prof_data+prof_count++;
-		if(prof_count>=PROF_CAP)
-		{
-			CRASH("Profiler OOB");
-			return;
-		}
-		info->t=t2-prof_timestamp;
-		info->size=size;
-		info->msg=msg;
+		CRASH("Profiler OOB");
+		return;
 	}
+	info->t=t2-prof_timestamp;
+	info->size=size;
+	info->msg=msg;
 	prof_timestamp=t2;
 }
 static void prof_print(ptrdiff_t usize)
