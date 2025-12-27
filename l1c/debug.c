@@ -17,9 +17,9 @@ int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
-//	#define CODEC codec_l1_ssse3
+	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
-	#define CODEC codec_l1_avx2
+//	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
 
 
@@ -34,15 +34,15 @@ int ansvalidx=0, ansvalmax=0;
 int main(int argc, char **argv)
 {
 	const char *dstfn=//OVERWRITTEN
-		"C:/dataset-a-temp/zzz.ppm"
-	//	"D:/ML/zzz_deletethis.ppm"
-	//	"C:/Projects/datasets/zzz_deletethis.ppm"
+	//	"C:/dataset-a-temp/zzz.ppm"
+	//	"D:/ML/zzz.ppm"
+		"C:/Projects/datasets/zzz.ppm"
 	//	"F:/Projects/zzz.ppm"
 	;
 	const char *tmpfn=//OVERWRITTEN
-		"C:/dataset-a-temp/zzz.l1c"
-	//	"D:/ML/zzz_deletethis.l1c"
-	//	"C:/Projects/datasets/zzz_deletethis.l1c"
+	//	"C:/dataset-a-temp/zzz.l1c"
+	//	"D:/ML/zzz.l1c"
+		"C:/Projects/datasets/zzz.l1c"
 	//	"F:/Projects/zzz.l1c"
 	;
 	const char *srcfn=
@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-GDCC2020-ppm/astro-20.ppm"
 	//	"C:/dataset-GDCC2020-ppm/astro-30.ppm"
 	//	"C:/dataset-GDCC2020-ppm/astro-43.ppm"
-		"C:/dataset-GDCC2020-ppm/photo-01.ppm"
+	//	"C:/dataset-GDCC2020-ppm/photo-01.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-03.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-05.ppm"
 	//	"C:/dataset-GDCC2020-ppm/photo-49.ppm"
@@ -133,7 +133,7 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/big_building.PPM"
 	//	"C:/Projects/datasets/dataset-CLIC303-ppm/2048x1320_abigail-keenan-27293.ppm"
 	//	"C:/Projects/datasets/dataset-CLIC30-ppm/03.ppm"
-	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
+		"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 		argv[0],
 		srcfn,
 		tmpfn,
-		"2",
+	//	"2",
 	//	"17",//near
 	};
 	const char *decargs[]=

@@ -6,6 +6,7 @@
 #	define _GNU_SOURCE
 #	include<stddef.h>//ptrdiff_t
 #endif
+#include<stdint.h>
 #include<math.h>
 #include<immintrin.h>
 #include<sys/stat.h>
@@ -29,30 +30,38 @@
 //	#define EMULATE_GATHER		//gather is a little faster
 
 
-#define ANALYSIS_XSTRIDE 2
-#define ANALYSIS_YSTRIDE 2
+enum
+{
+	XCODERS=8,
+	YCODERS=8,
+	NCODERS=XCODERS*YCODERS,
 
-#define DEFAULT_EFFORT_LEVEL 2
-#define L1_NPREDS1 4
-#define L1_NPREDS2 8
-#define L1_NPREDS3 20
-#define L1_SH1 15//16	//L1SH1 <= 16
-#define L1_SH2 17//19	//L1SH2 >= 16
-#define L1_SH3 19//23	//L1SH3 >= 16
+	ANALYSIS_XSTRIDE=2,
+	ANALYSIS_YSTRIDE=2,
 
-#define GRBITS 3
-#define NCTX 18		//18*3+3 = 57 total
+	DEFAULT_EFFORT_LEVEL=2,
+	L1_NPREDS1=4,
+	L1_NPREDS2=8,
+	L1_NPREDS3=20,
+	L1_SH1=15,	//L1SH1 <= 16
+	L1_SH2=17,	//L1SH2 >= 16
+	L1_SH3=19,	//L1SH3 >= 16
 
-#define XCODERS 8	//xrem 1~3 cols
-#define YCODERS 8	//yrem 1~3 rows
+	GRBITS=3,
+	NCTX=18,	//18*3+3 = 57 total
 
-#define NCODERS 64
+	PROBBITS=12,	//12 bit max	James Bonfield's CDF2sym: {freq<<20 | bias<<8 | sym}
+	RANS_STATE_BITS=31,
+	RANS_RENORM_BITS=16,
 
-#define PROBBITS 12	//12 bit max	James Bonfield's CDF2sym: {freq<<20 | bias<<8 | sym}
+	XPAD=8,
+	NROWS=4,
+	NCH=3,
+	NVAL=2,
+	NREG=sizeof(int16_t[NCODERS])/sizeof(__m512i),
+};
 
-#define RANS_STATE_BITS 31
-#define RANS_RENORM_BITS 16
-
+#define COMMON_rANS
 #include"common.h"
 AWM_INLINE void gather32(int *dst, const int *src, const int *offsets)
 {
@@ -773,8 +782,8 @@ int codec_l1_avx512(int argc, char **argv)
 		CDF2syms_size=nctx*(int)sizeof(rANS_SIMD_SymInfo[256]);
 	uint32_t *CDF2syms=(uint32_t*)_mm_malloc(CDF2syms_size, sizeof(__m512i));
 
-	psize=(int)sizeof(int16_t[4*6*NCODERS])*(blockw+16);//4 padded rows  *  {Y*NCODERS, U*NCODERS, V*NCODERS,  eY*NCODERS, eU*NCODERS, eV*NCODERS} = 2*3*32 = 192 channels  ~48*iw bytes
-	pixels=(int16_t*)_mm_malloc(psize, sizeof(__m512i));//~188 KB for 4K/12MP
+	psize=(blockw+2*XPAD)*(int)sizeof(int16_t[NCH*NROWS*NVAL*NCODERS]);//int16_t[blockw+2*XPAD][NCH*NROWS*NVAL*NCODERS]
+	pixels=(int16_t*)_mm_malloc(psize, sizeof(__m512i));
 	if((fwd&&!hists)||!CDF2syms||!pixels)
 	{
 		CRASH("Alloc error");
@@ -988,7 +997,6 @@ int codec_l1_avx512(int argc, char **argv)
 	__m512i uhelpmask=_mm512_set1_epi16(-(combination[II_COEFF_U_SUB_Y]!=0));
 	__m512i vc0=_mm512_set1_epi16(combination[II_COEFF_V_SUB_Y]);
 	__m512i vc1=_mm512_set1_epi16(combination[II_COEFF_V_SUB_U]);
-	int paddedwidth=blockw+16;
 	memset(pixels, 0, psize);
 	__m512i mctxmax=_mm512_set1_epi16(NCTX-1);
 	__m512i mctxuoffset=_mm512_set1_epi16(NCTX);
@@ -1025,23 +1033,6 @@ int codec_l1_avx512(int argc, char **argv)
 	int *L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
 	if(effort)
 		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[3*NCODERS]), sizeof(int));
-	//{
-	//	static const int weights0[]=
-	//	{
-	//		100000,//0	N
-	//		100000,//1	W
-	//		 80000,//2	3*(N-NN)+NNN
-	//		 80000,//3	3*(W-WW)+WWW
-	//		 50000,//4	W+NE-N
-	//		 50000,//5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
-	//		150000,//6	N+W-NW
-	//		 50000,//7	N+NE-NNE
-	//		0,
-	//	};
-	//	int *L1coeffs=(int*)L1weights;
-	//	for(int k=0;k<L1_NPREDS2+1;++k)
-	//		FILLMEM(L1coeffs+6*8*k, weights0[k], sizeof(int[6*8]), sizeof(int));
-	//}
 	if(!fwd)
 	{
 #ifdef _DEBUG
@@ -1055,10 +1046,17 @@ int codec_l1_avx512(int argc, char **argv)
 	{
 		ALIGN(64) int16_t *rows[]=
 		{
-			pixels+(paddedwidth*((ky-0LL)&3)+8LL)*6*NCODERS,
-			pixels+(paddedwidth*((ky-1LL)&3)+8LL)*6*NCODERS,
-			pixels+(paddedwidth*((ky-2LL)&3)+8LL)*6*NCODERS,
-			pixels+(paddedwidth*((ky-3LL)&3)+8LL)*6*NCODERS,
+			//X=0: [row0: pY pY pU pU pV pV eY eY eU eU eV eV  row1: ...]  X=1: ...
+			pixels+(XPAD*NROWS+(ky-0LL+NROWS)%NROWS)*NCODERS*NCH*NVAL,
+			pixels+(XPAD*NROWS+(ky-1LL+NROWS)%NROWS)*NCODERS*NCH*NVAL,
+			pixels+(XPAD*NROWS+(ky-2LL+NROWS)%NROWS)*NCODERS*NCH*NVAL,
+			pixels+(XPAD*NROWS+(ky-3LL+NROWS)%NROWS)*NCODERS*NCH*NVAL,
+
+			//X=0: [row0: pY pY eY eY pU pU eU eU pV pV eV eV  row1: ...]  X=1: ...
+			//pixels+(XPAD*NROWS*NCH+(ky-0LL+NROWS)%NROWS)*NVAL*NCODERS,
+			//pixels+(XPAD*NROWS*NCH+(ky-1LL+NROWS)%NROWS)*NVAL*NCODERS,
+			//pixels+(XPAD*NROWS*NCH+(ky-2LL+NROWS)%NROWS)*NVAL*NCODERS,
+			//pixels+(XPAD*NROWS*NCH+(ky-3LL+NROWS)%NROWS)*NVAL*NCODERS,
 		};
 		ALIGN(64) uint16_t syms[3*NCODERS]={0};
 		__m512i NW[6], N[6], W[6];
@@ -1070,25 +1068,24 @@ int codec_l1_avx512(int argc, char **argv)
 		memset(ecurr, 0, sizeof(ecurr));
 		memset(eNEE, 0, sizeof(eNEE));
 		memset(eNEEE, 0, sizeof(eNEEE));
-		//                       (__m512i*)rows[-Y]+E+C+X*6
-		eNEE[0]=_mm512_load_si512((__m512i*)rows[1]+6+0+2*12);
-		eNEE[1]=_mm512_load_si512((__m512i*)rows[1]+6+1+2*12);
-		eNEE[2]=_mm512_load_si512((__m512i*)rows[1]+6+2+2*12);
-		eNEE[3]=_mm512_load_si512((__m512i*)rows[1]+6+3+2*12);
-		eNEE[4]=_mm512_load_si512((__m512i*)rows[1]+6+4+2*12);
-		eNEE[5]=_mm512_load_si512((__m512i*)rows[1]+6+5+2*12);
+		//(__m512i*)rows[-Y]+C+(E+X*NROWS*NVAL)*NREG*NCH
+		eNEE[0]=_mm512_load_si512((__m512i*)rows[1]+0+(1+2*NROWS*NVAL)*NREG*NCH);
+		eNEE[1]=_mm512_load_si512((__m512i*)rows[1]+1+(1+2*NROWS*NVAL)*NREG*NCH);
+		eNEE[2]=_mm512_load_si512((__m512i*)rows[1]+2+(1+2*NROWS*NVAL)*NREG*NCH);
+		eNEE[3]=_mm512_load_si512((__m512i*)rows[1]+3+(1+2*NROWS*NVAL)*NREG*NCH);
+		eNEE[4]=_mm512_load_si512((__m512i*)rows[1]+4+(1+2*NROWS*NVAL)*NREG*NCH);
+		eNEE[5]=_mm512_load_si512((__m512i*)rows[1]+5+(1+2*NROWS*NVAL)*NREG*NCH);
 		for(int kx=0;kx<blockw;++kx)
 		{
 			__m512i
 				pred[6], ctx[6];
 			__m512i predYUV0[6];
-			//                     (__m512i*)rows[1]+E+C+X*6
-			N[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+0*12);//y neighbors
-			N[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+0*12);//y
-			N[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+0*12);//u
-			N[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+0*12);//u
-			N[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+0*12);//v
-			N[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+0*12);//v
+			N[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+0*NROWS*NVAL)*NREG*NCH);//y neighbors
+			N[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+0*NROWS*NVAL)*NREG*NCH);//y
+			N[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+0*NROWS*NVAL)*NREG*NCH);//u
+			N[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+0*NROWS*NVAL)*NREG*NCH);//u
+			N[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+0*NROWS*NVAL)*NREG*NCH);//v
+			N[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+0*NROWS*NVAL)*NREG*NCH);//v
 			{
 				//context = FLOOR_LOG2(eW*eW+1)
 				__m512i one=_mm512_set1_epi32(1);
@@ -1229,12 +1226,12 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[2*6+5]=W[5];
 
 					//NE
-					L1preds[3*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+0+1*12);
-					L1preds[3*6+1]=_mm512_load_si512((__m512i*)rows[1]+0+1+1*12);
-					L1preds[3*6+2]=_mm512_load_si512((__m512i*)rows[1]+0+2+1*12);
-					L1preds[3*6+3]=_mm512_load_si512((__m512i*)rows[1]+0+3+1*12);
-					L1preds[3*6+4]=_mm512_load_si512((__m512i*)rows[1]+0+4+1*12);
-					L1preds[3*6+5]=_mm512_load_si512((__m512i*)rows[1]+0+5+1*12);
+					L1preds[3*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH);
+					L1preds[3*6+1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH);
+					L1preds[3*6+2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH);
+					L1preds[3*6+3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH);
+					L1preds[3*6+4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH);
+					L1preds[3*6+5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH);
 					
 
 					//mix
@@ -1336,24 +1333,24 @@ int codec_l1_avx512(int argc, char **argv)
 					//loosen pred range
 					if(!cond_cg)
 					{
-						t[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+1*12);//NE
-						t[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+1*12);
-						t[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+1*12);
-						t[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+1*12);
-						t[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+1*12);
-						t[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+1*12);
+						t[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH);//NE
+						t[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH);
+						t[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH);
+						t[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH);
+						t[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH);
+						t[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], t[0]); xmax[0]=_mm512_max_epi16(xmax[0], t[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], t[1]); xmax[1]=_mm512_max_epi16(xmax[1], t[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], t[2]); xmax[2]=_mm512_max_epi16(xmax[2], t[2]);
 						xmin[3]=_mm512_min_epi16(xmin[3], t[3]); xmax[3]=_mm512_max_epi16(xmax[3], t[3]);
 						xmin[4]=_mm512_min_epi16(xmin[4], t[4]); xmax[4]=_mm512_max_epi16(xmax[4], t[4]);
 						xmin[5]=_mm512_min_epi16(xmin[5], t[5]); xmax[5]=_mm512_max_epi16(xmax[5], t[5]);
-						t[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+3*12);//NEEE
-						t[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+3*12);
-						t[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+3*12);
-						t[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+3*12);
-						t[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+3*12);
-						t[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+3*12);
+						t[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH);//NEEE
+						t[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH);
+						t[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH);
+						t[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH);
+						t[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH);
+						t[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], t[0]); xmax[0]=_mm512_max_epi16(xmax[0], t[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], t[1]); xmax[1]=_mm512_max_epi16(xmax[1], t[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], t[2]); xmax[2]=_mm512_max_epi16(xmax[2], t[2]);
@@ -1394,44 +1391,44 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[1*6+5]=W[5];
 
 					//3*(N-NN)+NNN
-					cache[0]=_mm512_sub_epi16(N[0], _mm512_load_si512((__m512i*)rows[2]+0+0+0*12));//N-NN
-					cache[1]=_mm512_sub_epi16(N[1], _mm512_load_si512((__m512i*)rows[2]+0+1+0*12));
-					cache[2]=_mm512_sub_epi16(N[2], _mm512_load_si512((__m512i*)rows[2]+0+2+0*12));
-					cache[3]=_mm512_sub_epi16(N[3], _mm512_load_si512((__m512i*)rows[2]+0+3+0*12));
-					cache[4]=_mm512_sub_epi16(N[4], _mm512_load_si512((__m512i*)rows[2]+0+4+0*12));
-					cache[5]=_mm512_sub_epi16(N[5], _mm512_load_si512((__m512i*)rows[2]+0+5+0*12));
+					cache[0]=_mm512_sub_epi16(N[0], _mm512_load_si512((__m512i*)rows[2]+0+(0+0*NROWS*NVAL)*NREG*NCH));//N-NN
+					cache[1]=_mm512_sub_epi16(N[1], _mm512_load_si512((__m512i*)rows[2]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_sub_epi16(N[2], _mm512_load_si512((__m512i*)rows[2]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_sub_epi16(N[3], _mm512_load_si512((__m512i*)rows[2]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_sub_epi16(N[4], _mm512_load_si512((__m512i*)rows[2]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_sub_epi16(N[5], _mm512_load_si512((__m512i*)rows[2]+5+(0+0*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_add_epi16(cache[0], _mm512_slli_epi16(cache[0], 1));//*3
 					cache[1]=_mm512_add_epi16(cache[1], _mm512_slli_epi16(cache[1], 1));
 					cache[2]=_mm512_add_epi16(cache[2], _mm512_slli_epi16(cache[2], 1));
 					cache[3]=_mm512_add_epi16(cache[3], _mm512_slli_epi16(cache[3], 1));
 					cache[4]=_mm512_add_epi16(cache[4], _mm512_slli_epi16(cache[4], 1));
 					cache[5]=_mm512_add_epi16(cache[5], _mm512_slli_epi16(cache[5], 1));
-					L1preds[2*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+0+0*12));//+NNN
-					L1preds[2*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+0+1+0*12));
-					L1preds[2*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+0+2+0*12));
-					L1preds[2*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+0+3+0*12));
-					L1preds[2*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+0+4+0*12));
-					L1preds[2*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+0+5+0*12));
+					L1preds[2*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+(0+0*NROWS*NVAL)*NREG*NCH));//+NNN
+					L1preds[2*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[2*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[2*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[2*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[2*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+5+(0+0*NROWS*NVAL)*NREG*NCH));
 
 					//3*(W-WW)+WWW
-					cache[0]=_mm512_sub_epi16(W[0], _mm512_load_si512((__m512i*)rows[0]+0+0-2*12));//W-WW
-					cache[1]=_mm512_sub_epi16(W[1], _mm512_load_si512((__m512i*)rows[0]+0+1-2*12));
-					cache[2]=_mm512_sub_epi16(W[2], _mm512_load_si512((__m512i*)rows[0]+0+2-2*12));
-					cache[3]=_mm512_sub_epi16(W[3], _mm512_load_si512((__m512i*)rows[0]+0+3-2*12));
-					cache[4]=_mm512_sub_epi16(W[4], _mm512_load_si512((__m512i*)rows[0]+0+4-2*12));
-					cache[5]=_mm512_sub_epi16(W[5], _mm512_load_si512((__m512i*)rows[0]+0+5-2*12));
+					cache[0]=_mm512_sub_epi16(W[0], _mm512_load_si512((__m512i*)rows[0]+0+(0-2*NROWS*NVAL)*NREG*NCH));//W-WW
+					cache[1]=_mm512_sub_epi16(W[1], _mm512_load_si512((__m512i*)rows[0]+1+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_sub_epi16(W[2], _mm512_load_si512((__m512i*)rows[0]+2+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_sub_epi16(W[3], _mm512_load_si512((__m512i*)rows[0]+3+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_sub_epi16(W[4], _mm512_load_si512((__m512i*)rows[0]+4+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_sub_epi16(W[5], _mm512_load_si512((__m512i*)rows[0]+5+(0-2*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_add_epi16(cache[0], _mm512_slli_epi16(cache[0], 1));//*3
 					cache[1]=_mm512_add_epi16(cache[1], _mm512_slli_epi16(cache[1], 1));
 					cache[2]=_mm512_add_epi16(cache[2], _mm512_slli_epi16(cache[2], 1));
 					cache[3]=_mm512_add_epi16(cache[3], _mm512_slli_epi16(cache[3], 1));
 					cache[4]=_mm512_add_epi16(cache[4], _mm512_slli_epi16(cache[4], 1));
 					cache[5]=_mm512_add_epi16(cache[5], _mm512_slli_epi16(cache[5], 1));
-					L1preds[3*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+0-3*12));//+WWW
-					L1preds[3*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+0+1-3*12));
-					L1preds[3*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+0+2-3*12));
-					L1preds[3*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+0+3-3*12));
-					L1preds[3*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+0+4-3*12));
-					L1preds[3*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+0+5-3*12));
+					L1preds[3*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+(0-3*NROWS*NVAL)*NREG*NCH));//+WWW
+					L1preds[3*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+1+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[3*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+2+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[3*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+3+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[3*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+4+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[3*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+5+(0-3*NROWS*NVAL)*NREG*NCH));
 
 					//W+NE-N
 					cache[0]=_mm512_sub_epi16(W[0], N[0]);
@@ -1440,12 +1437,12 @@ int codec_l1_avx512(int argc, char **argv)
 					cache[3]=_mm512_sub_epi16(W[3], N[3]);
 					cache[4]=_mm512_sub_epi16(W[4], N[4]);
 					cache[5]=_mm512_sub_epi16(W[5], N[5]);
-					L1preds[4*3+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+0+1*12));//+NE
-					L1preds[4*3+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+0+1+1*12));
-					L1preds[4*3+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+0+2+1*12));
-					L1preds[4*3+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+0+3+1*12));
-					L1preds[4*3+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+0+4+1*12));
-					L1preds[4*3+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+0+5+1*12));
+					L1preds[4*3+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH));//+NE
+					L1preds[4*3+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*3+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*3+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*3+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*3+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH));
 
 					//N+W-NW
 					L1preds[5*6+0]=pred[0];
@@ -1456,56 +1453,56 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[5*6+5]=pred[5];
 
 					//N+NE-NNE
-					cache[0]=_mm512_add_epi16(N[0], _mm512_load_si512((__m512i*)rows[1]+0+0+1*12));//N+NE
-					cache[1]=_mm512_add_epi16(N[1], _mm512_load_si512((__m512i*)rows[1]+0+1+1*12));
-					cache[2]=_mm512_add_epi16(N[2], _mm512_load_si512((__m512i*)rows[1]+0+2+1*12));
-					cache[3]=_mm512_add_epi16(N[3], _mm512_load_si512((__m512i*)rows[1]+0+3+1*12));
-					cache[4]=_mm512_add_epi16(N[4], _mm512_load_si512((__m512i*)rows[1]+0+4+1*12));
-					cache[5]=_mm512_add_epi16(N[5], _mm512_load_si512((__m512i*)rows[1]+0+5+1*12));
-					L1preds[6*6+0]=_mm512_sub_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+0+1*12));//NNE
-					L1preds[6*6+1]=_mm512_sub_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+0+1+1*12));
-					L1preds[6*6+2]=_mm512_sub_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+0+2+1*12));
-					L1preds[6*6+3]=_mm512_sub_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+0+3+1*12));
-					L1preds[6*6+4]=_mm512_sub_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+0+4+1*12));
-					L1preds[6*6+5]=_mm512_sub_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+0+5+1*12));
+					cache[0]=_mm512_add_epi16(N[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH));//N+NE
+					cache[1]=_mm512_add_epi16(N[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(N[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(N[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(N[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(N[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+0]=_mm512_sub_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+(0+1*NROWS*NVAL)*NREG*NCH));//NNE
+					L1preds[6*6+1]=_mm512_sub_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+2]=_mm512_sub_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+3]=_mm512_sub_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+4]=_mm512_sub_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+5]=_mm512_sub_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+5+(0+1*NROWS*NVAL)*NREG*NCH));
 
 					//(WWWW+WWW+NNN+NNEE+NEEE+NEEEE-(N+W))>>2
-					cache[0]=_mm512_load_si512((__m512i*)rows[0]+0+0-4*12);//WWWW
-					cache[1]=_mm512_load_si512((__m512i*)rows[0]+0+1-4*12);
-					cache[2]=_mm512_load_si512((__m512i*)rows[0]+0+2-4*12);
-					cache[3]=_mm512_load_si512((__m512i*)rows[0]+0+3-4*12);
-					cache[4]=_mm512_load_si512((__m512i*)rows[0]+0+4-4*12);
-					cache[5]=_mm512_load_si512((__m512i*)rows[0]+0+5-4*12);
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+0-3*12));//+WWW
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+0+1-3*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+0+2-3*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+0+3-3*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+0+4-3*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+0+5-3*12));
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+0+0*12));//+NNN
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+0+1+0*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+0+2+0*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+0+3+0*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+0+4+0*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+0+5+0*12));
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+0+2*12));//+NNEE
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+0+1+2*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+0+2+2*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+0+3+2*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+0+4+2*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+0+5+2*12));
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+0+3*12));//+NEEE
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+0+1+3*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+0+2+3*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+0+3+3*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+0+4+3*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+0+5+3*12));
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+0+4*12));//+NEEEE
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+0+1+4*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+0+2+4*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+0+3+4*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+0+4+4*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+0+5+4*12));
+					cache[0]=_mm512_load_si512((__m512i*)rows[0]+0+(0-4*NROWS*NVAL)*NREG*NCH);//WWWW
+					cache[1]=_mm512_load_si512((__m512i*)rows[0]+1+(0-4*NROWS*NVAL)*NREG*NCH);
+					cache[2]=_mm512_load_si512((__m512i*)rows[0]+2+(0-4*NROWS*NVAL)*NREG*NCH);
+					cache[3]=_mm512_load_si512((__m512i*)rows[0]+3+(0-4*NROWS*NVAL)*NREG*NCH);
+					cache[4]=_mm512_load_si512((__m512i*)rows[0]+4+(0-4*NROWS*NVAL)*NREG*NCH);
+					cache[5]=_mm512_load_si512((__m512i*)rows[0]+5+(0-4*NROWS*NVAL)*NREG*NCH);
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+(0-3*NROWS*NVAL)*NREG*NCH));//+WWW
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+1+(0-3*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+2+(0-3*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+3+(0-3*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+4+(0-3*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+5+(0-3*NROWS*NVAL)*NREG*NCH));
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+(0+0*NROWS*NVAL)*NREG*NCH));//+NNN
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+5+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+(0+2*NROWS*NVAL)*NREG*NCH));//+NNEE
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+1+(0+2*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+2+(0+2*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+3+(0+2*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+4+(0+2*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+5+(0+2*NROWS*NVAL)*NREG*NCH));
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH));//+NEEE
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+4*NROWS*NVAL)*NREG*NCH));//+NEEEE
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+4*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+4*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+4*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+4*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+4*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_sub_epi16(cache[0], _mm512_add_epi16(N[0], W[0]));
 					cache[1]=_mm512_sub_epi16(cache[1], _mm512_add_epi16(N[1], W[1]));
 					cache[2]=_mm512_sub_epi16(cache[2], _mm512_add_epi16(N[2], W[2]));
@@ -1618,24 +1615,24 @@ int codec_l1_avx512(int argc, char **argv)
 					//loosen pred range
 					if(!cond_cg)
 					{
-						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+1*12);//NE
-						cache[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+1*12);
-						cache[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+1*12);
-						cache[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+1*12);
-						cache[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+1*12);
-						cache[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+1*12);
+						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH);//NE
+						cache[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], cache[0]); xmax[0]=_mm512_max_epi16(xmax[0], cache[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], cache[1]); xmax[1]=_mm512_max_epi16(xmax[1], cache[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], cache[2]); xmax[2]=_mm512_max_epi16(xmax[2], cache[2]);
 						xmin[3]=_mm512_min_epi16(xmin[3], cache[3]); xmax[3]=_mm512_max_epi16(xmax[3], cache[3]);
 						xmin[4]=_mm512_min_epi16(xmin[4], cache[4]); xmax[4]=_mm512_max_epi16(xmax[4], cache[4]);
 						xmin[5]=_mm512_min_epi16(xmin[5], cache[5]); xmax[5]=_mm512_max_epi16(xmax[5], cache[5]);
-						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+3*12);//NEEE
-						cache[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+3*12);
-						cache[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+3*12);
-						cache[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+3*12);
-						cache[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+3*12);
-						cache[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+3*12);
+						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH);//NEEE
+						cache[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], cache[0]); xmax[0]=_mm512_max_epi16(xmax[0], cache[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], cache[1]); xmax[1]=_mm512_max_epi16(xmax[1], cache[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], cache[2]); xmax[2]=_mm512_max_epi16(xmax[2], cache[2]);
@@ -1698,12 +1695,12 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[2*6+5]=W[5];
 
 					//W+NE-N
-					cache[0]=_mm512_add_epi16(W[0], _mm512_load_si512((__m512i*)rows[1]+0+0+1*12));
-					cache[1]=_mm512_add_epi16(W[1], _mm512_load_si512((__m512i*)rows[1]+0+1+1*12));
-					cache[2]=_mm512_add_epi16(W[2], _mm512_load_si512((__m512i*)rows[1]+0+2+1*12));
-					cache[3]=_mm512_add_epi16(W[3], _mm512_load_si512((__m512i*)rows[1]+0+3+1*12));
-					cache[4]=_mm512_add_epi16(W[4], _mm512_load_si512((__m512i*)rows[1]+0+4+1*12));
-					cache[5]=_mm512_add_epi16(W[5], _mm512_load_si512((__m512i*)rows[1]+0+5+1*12));
+					cache[0]=_mm512_add_epi16(W[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[1]=_mm512_add_epi16(W[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(W[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(W[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(W[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(W[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH));
 					L1preds[3*6+0]=_mm512_sub_epi16(cache[0], N[0]);
 					L1preds[3*6+1]=_mm512_sub_epi16(cache[1], N[1]);
 					L1preds[3*6+2]=_mm512_sub_epi16(cache[2], N[2]);
@@ -1712,168 +1709,168 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[3*6+5]=_mm512_sub_epi16(cache[5], N[5]);
 
 					//3*(N-NN)+NNN
-					cache[0]=_mm512_sub_epi16(N[0], _mm512_load_si512((__m512i*)rows[2]+0+0+0*12));//N-NN
-					cache[1]=_mm512_sub_epi16(N[1], _mm512_load_si512((__m512i*)rows[2]+0+1+0*12));
-					cache[2]=_mm512_sub_epi16(N[2], _mm512_load_si512((__m512i*)rows[2]+0+2+0*12));
-					cache[3]=_mm512_sub_epi16(N[3], _mm512_load_si512((__m512i*)rows[2]+0+3+0*12));
-					cache[4]=_mm512_sub_epi16(N[4], _mm512_load_si512((__m512i*)rows[2]+0+4+0*12));
-					cache[5]=_mm512_sub_epi16(N[5], _mm512_load_si512((__m512i*)rows[2]+0+5+0*12));
+					cache[0]=_mm512_sub_epi16(N[0], _mm512_load_si512((__m512i*)rows[2]+0+(0+0*NROWS*NVAL)*NREG*NCH));//N-NN
+					cache[1]=_mm512_sub_epi16(N[1], _mm512_load_si512((__m512i*)rows[2]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_sub_epi16(N[2], _mm512_load_si512((__m512i*)rows[2]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_sub_epi16(N[3], _mm512_load_si512((__m512i*)rows[2]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_sub_epi16(N[4], _mm512_load_si512((__m512i*)rows[2]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_sub_epi16(N[5], _mm512_load_si512((__m512i*)rows[2]+5+(0+0*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_add_epi16(cache[0], _mm512_slli_epi16(cache[0], 1));//*3
 					cache[1]=_mm512_add_epi16(cache[1], _mm512_slli_epi16(cache[1], 1));
 					cache[2]=_mm512_add_epi16(cache[2], _mm512_slli_epi16(cache[2], 1));
 					cache[3]=_mm512_add_epi16(cache[3], _mm512_slli_epi16(cache[3], 1));
 					cache[4]=_mm512_add_epi16(cache[4], _mm512_slli_epi16(cache[4], 1));
 					cache[5]=_mm512_add_epi16(cache[5], _mm512_slli_epi16(cache[5], 1));
-					L1preds[4*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+0+0*12));//+NNN
-					L1preds[4*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+0+1+0*12));
-					L1preds[4*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+0+2+0*12));
-					L1preds[4*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+0+3+0*12));
-					L1preds[4*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+0+4+0*12));
-					L1preds[4*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+0+5+0*12));
+					L1preds[4*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[3]+0+(0+0*NROWS*NVAL)*NREG*NCH));//+NNN
+					L1preds[4*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[3]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[3]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[3]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[3]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[4*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[3]+5+(0+0*NROWS*NVAL)*NREG*NCH));
 
 					//3*(W-WW)+WWW
-					cache[0]=_mm512_sub_epi16(W[0], _mm512_load_si512((__m512i*)rows[0]+0+0-2*12));//W-WW
-					cache[1]=_mm512_sub_epi16(W[1], _mm512_load_si512((__m512i*)rows[0]+0+1-2*12));
-					cache[2]=_mm512_sub_epi16(W[2], _mm512_load_si512((__m512i*)rows[0]+0+2-2*12));
-					cache[3]=_mm512_sub_epi16(W[3], _mm512_load_si512((__m512i*)rows[0]+0+3-2*12));
-					cache[4]=_mm512_sub_epi16(W[4], _mm512_load_si512((__m512i*)rows[0]+0+4-2*12));
-					cache[5]=_mm512_sub_epi16(W[5], _mm512_load_si512((__m512i*)rows[0]+0+5-2*12));
+					cache[0]=_mm512_sub_epi16(W[0], _mm512_load_si512((__m512i*)rows[0]+0+(0-2*NROWS*NVAL)*NREG*NCH));//W-WW
+					cache[1]=_mm512_sub_epi16(W[1], _mm512_load_si512((__m512i*)rows[0]+1+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_sub_epi16(W[2], _mm512_load_si512((__m512i*)rows[0]+2+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_sub_epi16(W[3], _mm512_load_si512((__m512i*)rows[0]+3+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_sub_epi16(W[4], _mm512_load_si512((__m512i*)rows[0]+4+(0-2*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_sub_epi16(W[5], _mm512_load_si512((__m512i*)rows[0]+5+(0-2*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_add_epi16(cache[0], _mm512_slli_epi16(cache[0], 1));//*3
 					cache[1]=_mm512_add_epi16(cache[1], _mm512_slli_epi16(cache[1], 1));
 					cache[2]=_mm512_add_epi16(cache[2], _mm512_slli_epi16(cache[2], 1));
 					cache[3]=_mm512_add_epi16(cache[3], _mm512_slli_epi16(cache[3], 1));
 					cache[4]=_mm512_add_epi16(cache[4], _mm512_slli_epi16(cache[4], 1));
 					cache[5]=_mm512_add_epi16(cache[5], _mm512_slli_epi16(cache[5], 1));
-					L1preds[5*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+0-3*12));//+WWW
-					L1preds[5*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+0+1-3*12));
-					L1preds[5*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+0+2-3*12));
-					L1preds[5*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+0+3-3*12));
-					L1preds[5*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+0+4-3*12));
-					L1preds[5*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+0+5-3*12));
+					L1preds[5*6+0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[0]+0+(0-3*NROWS*NVAL)*NREG*NCH));//+WWW
+					L1preds[5*6+1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[0]+1+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[5*6+2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[0]+2+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[5*6+3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[0]+3+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[5*6+4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[0]+4+(0-3*NROWS*NVAL)*NREG*NCH));
+					L1preds[5*6+5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[0]+5+(0-3*NROWS*NVAL)*NREG*NCH));
 
 					//N+NE-NNE
-					cache[0]=_mm512_add_epi16(N[0], _mm512_load_si512((__m512i*)rows[1]+0+0+1*12));//N+NE
-					cache[1]=_mm512_add_epi16(N[1], _mm512_load_si512((__m512i*)rows[1]+0+1+1*12));
-					cache[2]=_mm512_add_epi16(N[2], _mm512_load_si512((__m512i*)rows[1]+0+2+1*12));
-					cache[3]=_mm512_add_epi16(N[3], _mm512_load_si512((__m512i*)rows[1]+0+3+1*12));
-					cache[4]=_mm512_add_epi16(N[4], _mm512_load_si512((__m512i*)rows[1]+0+4+1*12));
-					cache[5]=_mm512_add_epi16(N[5], _mm512_load_si512((__m512i*)rows[1]+0+5+1*12));
-					L1preds[6*6+0]=_mm512_sub_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+0+1*12));//NNE
-					L1preds[6*6+1]=_mm512_sub_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+0+1+1*12));
-					L1preds[6*6+2]=_mm512_sub_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+0+2+1*12));
-					L1preds[6*6+3]=_mm512_sub_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+0+3+1*12));
-					L1preds[6*6+4]=_mm512_sub_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+0+4+1*12));
-					L1preds[6*6+5]=_mm512_sub_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+0+5+1*12));
+					cache[0]=_mm512_add_epi16(N[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH));//N+NE
+					cache[1]=_mm512_add_epi16(N[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(N[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(N[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(N[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(N[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+0]=_mm512_sub_epi16(cache[0], _mm512_load_si512((__m512i*)rows[2]+0+(0+1*NROWS*NVAL)*NREG*NCH));//NNE
+					L1preds[6*6+1]=_mm512_sub_epi16(cache[1], _mm512_load_si512((__m512i*)rows[2]+1+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+2]=_mm512_sub_epi16(cache[2], _mm512_load_si512((__m512i*)rows[2]+2+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+3]=_mm512_sub_epi16(cache[3], _mm512_load_si512((__m512i*)rows[2]+3+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+4]=_mm512_sub_epi16(cache[4], _mm512_load_si512((__m512i*)rows[2]+4+(0+1*NROWS*NVAL)*NREG*NCH));
+					L1preds[6*6+5]=_mm512_sub_epi16(cache[5], _mm512_load_si512((__m512i*)rows[2]+5+(0+1*NROWS*NVAL)*NREG*NCH));
 
 					//NEE
-					L1preds[7*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+0+2*12);
-					L1preds[7*6+1]=_mm512_load_si512((__m512i*)rows[1]+0+1+2*12);
-					L1preds[7*6+2]=_mm512_load_si512((__m512i*)rows[1]+0+2+2*12);
-					L1preds[7*6+3]=_mm512_load_si512((__m512i*)rows[1]+0+3+2*12);
-					L1preds[7*6+4]=_mm512_load_si512((__m512i*)rows[1]+0+4+2*12);
-					L1preds[7*6+5]=_mm512_load_si512((__m512i*)rows[1]+0+5+2*12);
+					L1preds[7*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[7*6+1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[7*6+2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[7*6+3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[7*6+4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[7*6+5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+2*NROWS*NVAL)*NREG*NCH);
 
 					//NN
-					L1preds[8*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+0+0*12);
-					L1preds[8*6+1]=_mm512_load_si512((__m512i*)rows[2]+0+1+0*12);
-					L1preds[8*6+2]=_mm512_load_si512((__m512i*)rows[2]+0+2+0*12);
-					L1preds[8*6+3]=_mm512_load_si512((__m512i*)rows[2]+0+3+0*12);
-					L1preds[8*6+4]=_mm512_load_si512((__m512i*)rows[2]+0+4+0*12);
-					L1preds[8*6+5]=_mm512_load_si512((__m512i*)rows[2]+0+5+0*12);
+					L1preds[8*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+(0+0*NROWS*NVAL)*NREG*NCH);
+					L1preds[8*6+1]=_mm512_load_si512((__m512i*)rows[2]+1+(0+0*NROWS*NVAL)*NREG*NCH);
+					L1preds[8*6+2]=_mm512_load_si512((__m512i*)rows[2]+2+(0+0*NROWS*NVAL)*NREG*NCH);
+					L1preds[8*6+3]=_mm512_load_si512((__m512i*)rows[2]+3+(0+0*NROWS*NVAL)*NREG*NCH);
+					L1preds[8*6+4]=_mm512_load_si512((__m512i*)rows[2]+4+(0+0*NROWS*NVAL)*NREG*NCH);
+					L1preds[8*6+5]=_mm512_load_si512((__m512i*)rows[2]+5+(0+0*NROWS*NVAL)*NREG*NCH);
 
 					//WW
-					L1preds[9*6+0]=_mm512_load_si512((__m512i*)rows[0]+0+0-2*12);
-					L1preds[9*6+1]=_mm512_load_si512((__m512i*)rows[0]+0+1-2*12);
-					L1preds[9*6+2]=_mm512_load_si512((__m512i*)rows[0]+0+2-2*12);
-					L1preds[9*6+3]=_mm512_load_si512((__m512i*)rows[0]+0+3-2*12);
-					L1preds[9*6+4]=_mm512_load_si512((__m512i*)rows[0]+0+4-2*12);
-					L1preds[9*6+5]=_mm512_load_si512((__m512i*)rows[0]+0+5-2*12);
+					L1preds[9*6+0]=_mm512_load_si512((__m512i*)rows[0]+0+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[9*6+1]=_mm512_load_si512((__m512i*)rows[0]+1+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[9*6+2]=_mm512_load_si512((__m512i*)rows[0]+2+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[9*6+3]=_mm512_load_si512((__m512i*)rows[0]+3+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[9*6+4]=_mm512_load_si512((__m512i*)rows[0]+4+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[9*6+5]=_mm512_load_si512((__m512i*)rows[0]+5+(0-2*NROWS*NVAL)*NREG*NCH);
 
 					//2*N-NN
-					L1preds[10*6+0]=_mm512_sub_epi16(_mm512_slli_epi16(N[0], 1), _mm512_load_si512((__m512i*)rows[2]+0+0+0*12));
-					L1preds[10*6+1]=_mm512_sub_epi16(_mm512_slli_epi16(N[1], 1), _mm512_load_si512((__m512i*)rows[2]+0+1+0*12));
-					L1preds[10*6+2]=_mm512_sub_epi16(_mm512_slli_epi16(N[2], 1), _mm512_load_si512((__m512i*)rows[2]+0+2+0*12));
-					L1preds[10*6+3]=_mm512_sub_epi16(_mm512_slli_epi16(N[3], 1), _mm512_load_si512((__m512i*)rows[2]+0+3+0*12));
-					L1preds[10*6+4]=_mm512_sub_epi16(_mm512_slli_epi16(N[4], 1), _mm512_load_si512((__m512i*)rows[2]+0+4+0*12));
-					L1preds[10*6+5]=_mm512_sub_epi16(_mm512_slli_epi16(N[5], 1), _mm512_load_si512((__m512i*)rows[2]+0+5+0*12));
+					L1preds[10*6+0]=_mm512_sub_epi16(_mm512_slli_epi16(N[0], 1), _mm512_load_si512((__m512i*)rows[2]+0+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[10*6+1]=_mm512_sub_epi16(_mm512_slli_epi16(N[1], 1), _mm512_load_si512((__m512i*)rows[2]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[10*6+2]=_mm512_sub_epi16(_mm512_slli_epi16(N[2], 1), _mm512_load_si512((__m512i*)rows[2]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[10*6+3]=_mm512_sub_epi16(_mm512_slli_epi16(N[3], 1), _mm512_load_si512((__m512i*)rows[2]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[10*6+4]=_mm512_sub_epi16(_mm512_slli_epi16(N[4], 1), _mm512_load_si512((__m512i*)rows[2]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					L1preds[10*6+5]=_mm512_sub_epi16(_mm512_slli_epi16(N[5], 1), _mm512_load_si512((__m512i*)rows[2]+5+(0+0*NROWS*NVAL)*NREG*NCH));
 
 					//2*W-WW
-					L1preds[11*6+0]=_mm512_sub_epi16(_mm512_slli_epi16(W[0], 1), _mm512_load_si512((__m512i*)rows[0]+0+0-2*12));
-					L1preds[11*6+1]=_mm512_sub_epi16(_mm512_slli_epi16(W[1], 1), _mm512_load_si512((__m512i*)rows[0]+0+1-2*12));
-					L1preds[11*6+2]=_mm512_sub_epi16(_mm512_slli_epi16(W[2], 1), _mm512_load_si512((__m512i*)rows[0]+0+2-2*12));
-					L1preds[11*6+3]=_mm512_sub_epi16(_mm512_slli_epi16(W[3], 1), _mm512_load_si512((__m512i*)rows[0]+0+3-2*12));
-					L1preds[11*6+4]=_mm512_sub_epi16(_mm512_slli_epi16(W[4], 1), _mm512_load_si512((__m512i*)rows[0]+0+4-2*12));
-					L1preds[11*6+5]=_mm512_sub_epi16(_mm512_slli_epi16(W[5], 1), _mm512_load_si512((__m512i*)rows[0]+0+5-2*12));
+					L1preds[11*6+0]=_mm512_sub_epi16(_mm512_slli_epi16(W[0], 1), _mm512_load_si512((__m512i*)rows[0]+0+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[11*6+1]=_mm512_sub_epi16(_mm512_slli_epi16(W[1], 1), _mm512_load_si512((__m512i*)rows[0]+1+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[11*6+2]=_mm512_sub_epi16(_mm512_slli_epi16(W[2], 1), _mm512_load_si512((__m512i*)rows[0]+2+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[11*6+3]=_mm512_sub_epi16(_mm512_slli_epi16(W[3], 1), _mm512_load_si512((__m512i*)rows[0]+3+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[11*6+4]=_mm512_sub_epi16(_mm512_slli_epi16(W[4], 1), _mm512_load_si512((__m512i*)rows[0]+4+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[11*6+5]=_mm512_sub_epi16(_mm512_slli_epi16(W[5], 1), _mm512_load_si512((__m512i*)rows[0]+5+(0-2*NROWS*NVAL)*NREG*NCH));
 
 					//NEEE
-					L1preds[12*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+0+3*12);
-					L1preds[12*6+1]=_mm512_load_si512((__m512i*)rows[1]+0+1+3*12);
-					L1preds[12*6+2]=_mm512_load_si512((__m512i*)rows[1]+0+2+3*12);
-					L1preds[12*6+3]=_mm512_load_si512((__m512i*)rows[1]+0+3+3*12);
-					L1preds[12*6+4]=_mm512_load_si512((__m512i*)rows[1]+0+4+3*12);
-					L1preds[12*6+5]=_mm512_load_si512((__m512i*)rows[1]+0+5+3*12);
+					L1preds[12*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH);
+					L1preds[12*6+1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH);
+					L1preds[12*6+2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH);
+					L1preds[12*6+3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH);
+					L1preds[12*6+4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH);
+					L1preds[12*6+5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH);
 
 					//NEEEE
-					L1preds[13*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+0+4*12);
-					L1preds[13*6+1]=_mm512_load_si512((__m512i*)rows[1]+0+1+4*12);
-					L1preds[13*6+2]=_mm512_load_si512((__m512i*)rows[1]+0+2+4*12);
-					L1preds[13*6+3]=_mm512_load_si512((__m512i*)rows[1]+0+3+4*12);
-					L1preds[13*6+4]=_mm512_load_si512((__m512i*)rows[1]+0+4+4*12);
-					L1preds[13*6+5]=_mm512_load_si512((__m512i*)rows[1]+0+5+4*12);
+					L1preds[13*6+0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+4*NROWS*NVAL)*NREG*NCH);
+					L1preds[13*6+1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+4*NROWS*NVAL)*NREG*NCH);
+					L1preds[13*6+2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+4*NROWS*NVAL)*NREG*NCH);
+					L1preds[13*6+3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+4*NROWS*NVAL)*NREG*NCH);
+					L1preds[13*6+4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+4*NROWS*NVAL)*NREG*NCH);
+					L1preds[13*6+5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+4*NROWS*NVAL)*NREG*NCH);
 
 					//NNWW
-					L1preds[14*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+0-2*12);
-					L1preds[14*6+1]=_mm512_load_si512((__m512i*)rows[2]+0+1-2*12);
-					L1preds[14*6+2]=_mm512_load_si512((__m512i*)rows[2]+0+2-2*12);
-					L1preds[14*6+3]=_mm512_load_si512((__m512i*)rows[2]+0+3-2*12);
-					L1preds[14*6+4]=_mm512_load_si512((__m512i*)rows[2]+0+4-2*12);
-					L1preds[14*6+5]=_mm512_load_si512((__m512i*)rows[2]+0+5-2*12);
+					L1preds[14*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[14*6+1]=_mm512_load_si512((__m512i*)rows[2]+1+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[14*6+2]=_mm512_load_si512((__m512i*)rows[2]+2+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[14*6+3]=_mm512_load_si512((__m512i*)rows[2]+3+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[14*6+4]=_mm512_load_si512((__m512i*)rows[2]+4+(0-2*NROWS*NVAL)*NREG*NCH);
+					L1preds[14*6+5]=_mm512_load_si512((__m512i*)rows[2]+5+(0-2*NROWS*NVAL)*NREG*NCH);
 
 					//NNEE
-					L1preds[15*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+0+2*12);
-					L1preds[15*6+1]=_mm512_load_si512((__m512i*)rows[2]+0+1+2*12);
-					L1preds[15*6+2]=_mm512_load_si512((__m512i*)rows[2]+0+2+2*12);
-					L1preds[15*6+3]=_mm512_load_si512((__m512i*)rows[2]+0+3+2*12);
-					L1preds[15*6+4]=_mm512_load_si512((__m512i*)rows[2]+0+4+2*12);
-					L1preds[15*6+5]=_mm512_load_si512((__m512i*)rows[2]+0+5+2*12);
+					L1preds[15*6+0]=_mm512_load_si512((__m512i*)rows[2]+0+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[15*6+1]=_mm512_load_si512((__m512i*)rows[2]+1+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[15*6+2]=_mm512_load_si512((__m512i*)rows[2]+2+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[15*6+3]=_mm512_load_si512((__m512i*)rows[2]+3+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[15*6+4]=_mm512_load_si512((__m512i*)rows[2]+4+(0+2*NROWS*NVAL)*NREG*NCH);
+					L1preds[15*6+5]=_mm512_load_si512((__m512i*)rows[2]+5+(0+2*NROWS*NVAL)*NREG*NCH);
 
 					//N+NW-NNW
-					L1preds[16*6+0]=_mm512_sub_epi16(_mm512_add_epi16(N[0], NW[0]), _mm512_load_si512((__m512i*)rows[2]+0+0-1*12));
-					L1preds[16*6+1]=_mm512_sub_epi16(_mm512_add_epi16(N[1], NW[1]), _mm512_load_si512((__m512i*)rows[2]+0+1-1*12));
-					L1preds[16*6+2]=_mm512_sub_epi16(_mm512_add_epi16(N[2], NW[2]), _mm512_load_si512((__m512i*)rows[2]+0+2-1*12));
-					L1preds[16*6+3]=_mm512_sub_epi16(_mm512_add_epi16(N[3], NW[3]), _mm512_load_si512((__m512i*)rows[2]+0+3-1*12));
-					L1preds[16*6+4]=_mm512_sub_epi16(_mm512_add_epi16(N[4], NW[4]), _mm512_load_si512((__m512i*)rows[2]+0+4-1*12));
-					L1preds[16*6+5]=_mm512_sub_epi16(_mm512_add_epi16(N[5], NW[5]), _mm512_load_si512((__m512i*)rows[2]+0+5-1*12));
+					L1preds[16*6+0]=_mm512_sub_epi16(_mm512_add_epi16(N[0], NW[0]), _mm512_load_si512((__m512i*)rows[2]+0+(0-1*NROWS*NVAL)*NREG*NCH));
+					L1preds[16*6+1]=_mm512_sub_epi16(_mm512_add_epi16(N[1], NW[1]), _mm512_load_si512((__m512i*)rows[2]+1+(0-1*NROWS*NVAL)*NREG*NCH));
+					L1preds[16*6+2]=_mm512_sub_epi16(_mm512_add_epi16(N[2], NW[2]), _mm512_load_si512((__m512i*)rows[2]+2+(0-1*NROWS*NVAL)*NREG*NCH));
+					L1preds[16*6+3]=_mm512_sub_epi16(_mm512_add_epi16(N[3], NW[3]), _mm512_load_si512((__m512i*)rows[2]+3+(0-1*NROWS*NVAL)*NREG*NCH));
+					L1preds[16*6+4]=_mm512_sub_epi16(_mm512_add_epi16(N[4], NW[4]), _mm512_load_si512((__m512i*)rows[2]+4+(0-1*NROWS*NVAL)*NREG*NCH));
+					L1preds[16*6+5]=_mm512_sub_epi16(_mm512_add_epi16(N[5], NW[5]), _mm512_load_si512((__m512i*)rows[2]+5+(0-1*NROWS*NVAL)*NREG*NCH));
 
 					//W+NW-NWW
-					L1preds[17*6+0]=_mm512_sub_epi16(_mm512_add_epi16(W[0], NW[0]), _mm512_load_si512((__m512i*)rows[1]+0+0-2*12));
-					L1preds[17*6+1]=_mm512_sub_epi16(_mm512_add_epi16(W[1], NW[1]), _mm512_load_si512((__m512i*)rows[1]+0+1-2*12));
-					L1preds[17*6+2]=_mm512_sub_epi16(_mm512_add_epi16(W[2], NW[2]), _mm512_load_si512((__m512i*)rows[1]+0+2-2*12));
-					L1preds[17*6+3]=_mm512_sub_epi16(_mm512_add_epi16(W[3], NW[3]), _mm512_load_si512((__m512i*)rows[1]+0+3-2*12));
-					L1preds[17*6+4]=_mm512_sub_epi16(_mm512_add_epi16(W[4], NW[4]), _mm512_load_si512((__m512i*)rows[1]+0+4-2*12));
-					L1preds[17*6+5]=_mm512_sub_epi16(_mm512_add_epi16(W[5], NW[5]), _mm512_load_si512((__m512i*)rows[1]+0+5-2*12));
+					L1preds[17*6+0]=_mm512_sub_epi16(_mm512_add_epi16(W[0], NW[0]), _mm512_load_si512((__m512i*)rows[1]+0+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[17*6+1]=_mm512_sub_epi16(_mm512_add_epi16(W[1], NW[1]), _mm512_load_si512((__m512i*)rows[1]+1+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[17*6+2]=_mm512_sub_epi16(_mm512_add_epi16(W[2], NW[2]), _mm512_load_si512((__m512i*)rows[1]+2+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[17*6+3]=_mm512_sub_epi16(_mm512_add_epi16(W[3], NW[3]), _mm512_load_si512((__m512i*)rows[1]+3+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[17*6+4]=_mm512_sub_epi16(_mm512_add_epi16(W[4], NW[4]), _mm512_load_si512((__m512i*)rows[1]+4+(0-2*NROWS*NVAL)*NREG*NCH));
+					L1preds[17*6+5]=_mm512_sub_epi16(_mm512_add_epi16(W[5], NW[5]), _mm512_load_si512((__m512i*)rows[1]+5+(0-2*NROWS*NVAL)*NREG*NCH));
 
 					//(WWWW+NEEEE)>>1
-					L1preds[18*6+0]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+0-4*12), _mm512_load_si512((__m512i*)rows[1]+0+0+4*12)), 1);
-					L1preds[18*6+1]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+1-4*12), _mm512_load_si512((__m512i*)rows[1]+0+1+4*12)), 1);
-					L1preds[18*6+2]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+2-4*12), _mm512_load_si512((__m512i*)rows[1]+0+2+4*12)), 1);
-					L1preds[18*6+3]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+3-4*12), _mm512_load_si512((__m512i*)rows[1]+0+3+4*12)), 1);
-					L1preds[18*6+4]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+4-4*12), _mm512_load_si512((__m512i*)rows[1]+0+4+4*12)), 1);
-					L1preds[18*6+5]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+5-4*12), _mm512_load_si512((__m512i*)rows[1]+0+5+4*12)), 1);
+					L1preds[18*6+0]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+0+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
+					L1preds[18*6+1]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+1+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+1+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
+					L1preds[18*6+2]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+2+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+2+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
+					L1preds[18*6+3]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+3+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+3+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
+					L1preds[18*6+4]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+4+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+4+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
+					L1preds[18*6+5]=_mm512_srai_epi16(_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+5+(0-4*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[1]+5+(0+4*NROWS*NVAL)*NREG*NCH)), 1);
 
 					//(WWW+NNN+NEEE-NW)>>1
-					cache[0]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+0-3*12), _mm512_load_si512((__m512i*)rows[3]+0+0+0*12));//WWW+NNN
-					cache[1]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+1-3*12), _mm512_load_si512((__m512i*)rows[3]+0+1+0*12));
-					cache[2]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+2-3*12), _mm512_load_si512((__m512i*)rows[3]+0+2+0*12));
-					cache[3]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+3-3*12), _mm512_load_si512((__m512i*)rows[3]+0+3+0*12));
-					cache[4]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+4-3*12), _mm512_load_si512((__m512i*)rows[3]+0+4+0*12));
-					cache[5]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+5-3*12), _mm512_load_si512((__m512i*)rows[3]+0+5+0*12));
-					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+0+3*12));//+NEEE
-					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+0+1+3*12));
-					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+0+2+3*12));
-					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+0+3+3*12));
-					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+0+4+3*12));
-					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+0+5+3*12));
+					cache[0]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+0+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+0+(0+0*NROWS*NVAL)*NREG*NCH));//WWW+NNN
+					cache[1]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+1+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+1+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+2+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+2+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+3+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+3+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+4+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+4+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(_mm512_load_si512((__m512i*)rows[0]+5+(0-3*NROWS*NVAL)*NREG*NCH), _mm512_load_si512((__m512i*)rows[3]+5+(0+0*NROWS*NVAL)*NREG*NCH));
+					cache[0]=_mm512_add_epi16(cache[0], _mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH));//+NEEE
+					cache[1]=_mm512_add_epi16(cache[1], _mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[2]=_mm512_add_epi16(cache[2], _mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[3]=_mm512_add_epi16(cache[3], _mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[4]=_mm512_add_epi16(cache[4], _mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH));
+					cache[5]=_mm512_add_epi16(cache[5], _mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH));
 					cache[0]=_mm512_sub_epi16(cache[0], NW[0]);//-NW
 					cache[1]=_mm512_sub_epi16(cache[1], NW[1]);
 					cache[2]=_mm512_sub_epi16(cache[2], NW[2]);
@@ -1986,24 +1983,24 @@ int codec_l1_avx512(int argc, char **argv)
 					//loosen pred range
 					if(!cond_cg)
 					{
-						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+1*12);//NE
-						cache[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+1*12);
-						cache[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+1*12);
-						cache[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+1*12);
-						cache[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+1*12);
-						cache[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+1*12);
+						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+1*NROWS*NVAL)*NREG*NCH);//NE
+						cache[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH);
+						cache[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], cache[0]); xmax[0]=_mm512_max_epi16(xmax[0], cache[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], cache[1]); xmax[1]=_mm512_max_epi16(xmax[1], cache[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], cache[2]); xmax[2]=_mm512_max_epi16(xmax[2], cache[2]);
 						xmin[3]=_mm512_min_epi16(xmin[3], cache[3]); xmax[3]=_mm512_max_epi16(xmax[3], cache[3]);
 						xmin[4]=_mm512_min_epi16(xmin[4], cache[4]); xmax[4]=_mm512_max_epi16(xmax[4], cache[4]);
 						xmin[5]=_mm512_min_epi16(xmin[5], cache[5]); xmax[5]=_mm512_max_epi16(xmax[5], cache[5]);
-						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+0+3*12);//NEEE
-						cache[1]=_mm512_load_si512((__m512i*)rows[1]+0+1+3*12);
-						cache[2]=_mm512_load_si512((__m512i*)rows[1]+0+2+3*12);
-						cache[3]=_mm512_load_si512((__m512i*)rows[1]+0+3+3*12);
-						cache[4]=_mm512_load_si512((__m512i*)rows[1]+0+4+3*12);
-						cache[5]=_mm512_load_si512((__m512i*)rows[1]+0+5+3*12);
+						cache[0]=_mm512_load_si512((__m512i*)rows[1]+0+(0+3*NROWS*NVAL)*NREG*NCH);//NEEE
+						cache[1]=_mm512_load_si512((__m512i*)rows[1]+1+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[2]=_mm512_load_si512((__m512i*)rows[1]+2+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+3*NROWS*NVAL)*NREG*NCH);
+						cache[5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+3*NROWS*NVAL)*NREG*NCH);
 						xmin[0]=_mm512_min_epi16(xmin[0], cache[0]); xmax[0]=_mm512_max_epi16(xmax[0], cache[0]);
 						xmin[1]=_mm512_min_epi16(xmin[1], cache[1]); xmax[1]=_mm512_max_epi16(xmax[1], cache[1]);
 						xmin[2]=_mm512_min_epi16(xmin[2], cache[2]); xmax[2]=_mm512_max_epi16(xmax[2], cache[2]);
@@ -2478,12 +2475,12 @@ int codec_l1_avx512(int argc, char **argv)
 			W[3]=_mm512_sub_epi16(myuv[3], moffset[1]);
 			W[4]=_mm512_sub_epi16(myuv[4], moffset[2]);
 			W[5]=_mm512_sub_epi16(myuv[5], moffset[3]);
-			_mm512_store_si512((__m512i*)rows[0]+0+0+0*12, W[0]);//store neighbors
-			_mm512_store_si512((__m512i*)rows[0]+0+1+0*12, W[1]);
-			_mm512_store_si512((__m512i*)rows[0]+0+2+0*12, W[2]);
-			_mm512_store_si512((__m512i*)rows[0]+0+3+0*12, W[3]);
-			_mm512_store_si512((__m512i*)rows[0]+0+4+0*12, W[4]);
-			_mm512_store_si512((__m512i*)rows[0]+0+5+0*12, W[5]);
+			_mm512_store_si512((__m512i*)rows[0]+0+(0+0*NROWS*NVAL)*NREG*NCH, W[0]);//store neighbors
+			_mm512_store_si512((__m512i*)rows[0]+1+(0+0*NROWS*NVAL)*NREG*NCH, W[1]);
+			_mm512_store_si512((__m512i*)rows[0]+2+(0+0*NROWS*NVAL)*NREG*NCH, W[2]);
+			_mm512_store_si512((__m512i*)rows[0]+3+(0+0*NROWS*NVAL)*NREG*NCH, W[3]);
+			_mm512_store_si512((__m512i*)rows[0]+4+(0+0*NROWS*NVAL)*NREG*NCH, W[4]);
+			_mm512_store_si512((__m512i*)rows[0]+5+(0+0*NROWS*NVAL)*NREG*NCH, W[5]);
 			ecurr[0]=_mm512_xor_si512(_mm512_slli_epi16(ecurr[0], 1), _mm512_srai_epi16(ecurr[0], 15));
 			ecurr[1]=_mm512_xor_si512(_mm512_slli_epi16(ecurr[1], 1), _mm512_srai_epi16(ecurr[1], 15));
 			ecurr[2]=_mm512_xor_si512(_mm512_slli_epi16(ecurr[2], 1), _mm512_srai_epi16(ecurr[2], 15));
@@ -2737,12 +2734,12 @@ int codec_l1_avx512(int argc, char **argv)
 				}
 			}
 			//context update = (2*eW+(e<<3)+max(eNEE, eNEEE))>>2
-			eNEEE[0]=_mm512_load_si512((__m512i*)rows[1]+6+0+3*12);
-			eNEEE[1]=_mm512_load_si512((__m512i*)rows[1]+6+1+3*12);
-			eNEEE[2]=_mm512_load_si512((__m512i*)rows[1]+6+2+3*12);
-			eNEEE[3]=_mm512_load_si512((__m512i*)rows[1]+6+3+3*12);
-			eNEEE[4]=_mm512_load_si512((__m512i*)rows[1]+6+4+3*12);
-			eNEEE[5]=_mm512_load_si512((__m512i*)rows[1]+6+5+3*12);
+			eNEEE[0]=_mm512_load_si512((__m512i*)rows[1]+0+(1+3*NROWS*NVAL)*NREG*NCH);
+			eNEEE[1]=_mm512_load_si512((__m512i*)rows[1]+1+(1+3*NROWS*NVAL)*NREG*NCH);
+			eNEEE[2]=_mm512_load_si512((__m512i*)rows[1]+2+(1+3*NROWS*NVAL)*NREG*NCH);
+			eNEEE[3]=_mm512_load_si512((__m512i*)rows[1]+3+(1+3*NROWS*NVAL)*NREG*NCH);
+			eNEEE[4]=_mm512_load_si512((__m512i*)rows[1]+4+(1+3*NROWS*NVAL)*NREG*NCH);
+			eNEEE[5]=_mm512_load_si512((__m512i*)rows[1]+5+(1+3*NROWS*NVAL)*NREG*NCH);
 			
 			ecurr[0]=_mm512_slli_epi16(ecurr[0], GRBITS);
 			ecurr[1]=_mm512_slli_epi16(ecurr[1], GRBITS);
@@ -2763,12 +2760,12 @@ int codec_l1_avx512(int argc, char **argv)
 			eW[4]=_mm512_avg_epu16(eW[4], ecurr[4]);
 			eW[5]=_mm512_avg_epu16(eW[5], ecurr[5]);
 
-			_mm512_store_si512((__m512i*)rows[0]+6+0+0*12, eW[0]);//store current contexts
-			_mm512_store_si512((__m512i*)rows[0]+6+1+0*12, eW[1]);
-			_mm512_store_si512((__m512i*)rows[0]+6+2+0*12, eW[2]);
-			_mm512_store_si512((__m512i*)rows[0]+6+3+0*12, eW[3]);
-			_mm512_store_si512((__m512i*)rows[0]+6+4+0*12, eW[4]);
-			_mm512_store_si512((__m512i*)rows[0]+6+5+0*12, eW[5]);
+			_mm512_store_si512((__m512i*)rows[0]+0+(1+0*NROWS*NVAL)*NREG*NCH, eW[0]);//store current contexts
+			_mm512_store_si512((__m512i*)rows[0]+1+(1+0*NROWS*NVAL)*NREG*NCH, eW[1]);
+			_mm512_store_si512((__m512i*)rows[0]+2+(1+0*NROWS*NVAL)*NREG*NCH, eW[2]);
+			_mm512_store_si512((__m512i*)rows[0]+3+(1+0*NROWS*NVAL)*NREG*NCH, eW[3]);
+			_mm512_store_si512((__m512i*)rows[0]+4+(1+0*NROWS*NVAL)*NREG*NCH, eW[4]);
+			_mm512_store_si512((__m512i*)rows[0]+5+(1+0*NROWS*NVAL)*NREG*NCH, eW[5]);
 			eNEE[0]=eNEEE[0];
 			eNEE[1]=eNEEE[1];
 			eNEE[2]=eNEEE[2];
@@ -2781,11 +2778,11 @@ int codec_l1_avx512(int argc, char **argv)
 			NW[3]=N[3];
 			NW[4]=N[4];
 			NW[5]=N[5];
-			rows[0]+=6*NCODERS;
-			rows[1]+=6*NCODERS;
-			rows[2]+=6*NCODERS;
-			rows[3]+=6*NCODERS;
-			imptr+=3*NCODERS;
+			rows[0]+=NCODERS*NVAL*NCH*NROWS;
+			rows[1]+=NCODERS*NVAL*NCH*NROWS;
+			rows[2]+=NCODERS*NVAL*NCH*NROWS;
+			rows[3]+=NCODERS*NVAL*NCH*NROWS;
+			imptr+=NCH*NCODERS;
 		}
 		//printf("%8d/%8d\r", ky+1, blockh);
 	}
@@ -3144,7 +3141,15 @@ int codec_l1_avx512(int argc, char **argv)
 			printf("Total estimate  %12.2lf bytes\n", etotal);
 #endif
 #ifdef LOUD
-			printf("%s  WH %d*%d\n", srcfn, iw, ih);
+			printf("WH %d*%d  RCT %2d %s  effort %d  dist %d  \"%s\"\n"
+				, iw
+				, ih
+				, bestrct
+				, rct_names[bestrct]
+				, effort
+				, dist
+				, srcfn
+			);
 			printf("%8td/%8td bytes\n", csize2, usize2);
 #endif
 			(void)csize2;

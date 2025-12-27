@@ -335,15 +335,18 @@ static int prof_count=0;
 static void prof_checkpoint(ptrdiff_t size, const char *msg)
 {
 	double t2=time_sec();
-	SpeedProfilerInfo *info=prof_data+prof_count++;
-	if(prof_count>=PROF_CAP)
+	//if(prof_timestamp)
 	{
-		CRASH("Profiler OOB");
-		return;
+		SpeedProfilerInfo *info=prof_data+prof_count++;
+		if(prof_count>=PROF_CAP)
+		{
+			CRASH("Profiler OOB");
+			return;
+		}
+		info->t=t2-prof_timestamp;
+		info->size=size;
+		info->msg=msg;
 	}
-	info->t=t2-prof_timestamp;
-	info->size=size;
-	info->msg=msg;
 	prof_timestamp=t2;
 }
 static void prof_print(ptrdiff_t usize)
@@ -893,7 +896,7 @@ AWM_INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
 #endif
 
 //SIMD static-o1 rANS	https://github.com/rygorous/ryg_rans	https://github.com/samtools/htscodecs
-#ifdef PROBBITS
+#ifdef COMMON_rANS
 typedef struct _rANS_SIMD_SymInfo	//16 bytes/level	4KB/ctx = 1<<12 bytes
 {
 	uint32_t smax, invf, cdf;
