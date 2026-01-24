@@ -635,7 +635,7 @@ int codec_l1_avx512(int argc, char **argv)
 	int param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
 	int effort=param1&3, profile=param1>>2;
 	if(dist>1)
-		CLAMP2(dist, 4, 31);
+		CLAMP2(dist, 3, 31);
 #ifdef ESTIMATE_SIZE
 	double esize[3*NCODERS]={0};
 #endif
@@ -1196,7 +1196,7 @@ int codec_l1_avx512(int argc, char **argv)
 					/*
 					effort 1
 					0	N+W-NW
-					1	N
+					1	2*N-NN
 					2	W
 					3	NE
 					*/
@@ -1209,13 +1209,13 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[0*6+4]=pred[4];
 					L1preds[0*6+5]=pred[5];
 
-					//N
-					L1preds[1*6+0]=N[0];
-					L1preds[1*6+1]=N[1];
-					L1preds[1*6+2]=N[2];
-					L1preds[1*6+3]=N[3];
-					L1preds[1*6+4]=N[4];
-					L1preds[1*6+5]=N[5];
+					//2*N-NN
+					L1preds[1*6+0]=_mm512_sub_epi16(_mm512_add_epi16(N[0], N[0]), _mm512_load_si512((__m512i*)rows[2]+0+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+1]=_mm512_sub_epi16(_mm512_add_epi16(N[1], N[1]), _mm512_load_si512((__m512i*)rows[2]+1+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+2]=_mm512_sub_epi16(_mm512_add_epi16(N[2], N[2]), _mm512_load_si512((__m512i*)rows[2]+2+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+3]=_mm512_sub_epi16(_mm512_add_epi16(N[3], N[3]), _mm512_load_si512((__m512i*)rows[2]+3+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+4]=_mm512_sub_epi16(_mm512_add_epi16(N[4], N[4]), _mm512_load_si512((__m512i*)rows[2]+4+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+5]=_mm512_sub_epi16(_mm512_add_epi16(N[5], N[5]), _mm512_load_si512((__m512i*)rows[2]+5+(0+0*NCH)*NROWS*NVAL));
 
 					//W
 					L1preds[2*6+0]=W[0];
@@ -3141,7 +3141,7 @@ int codec_l1_avx512(int argc, char **argv)
 			printf("Total estimate  %12.2lf bytes\n", etotal);
 #endif
 #ifdef LOUD
-			printf("WH %d*%d  RCT %2d %s  effort %d  dist %d  \"%s\"\n"
+			printf("L1C AVX512 WH %d*%d  RCT %2d %s  effort %d  dist %3d  \"%s\"\n"
 				, iw
 				, ih
 				, bestrct

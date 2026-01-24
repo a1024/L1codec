@@ -31,6 +31,7 @@
 //	#define TEST_INTERLEAVE
 #endif
 
+//	#define USE_YCBCR
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave
 
@@ -311,10 +312,6 @@ AWM_INLINE void dec_yuv(
 		mstate[1]=_mm_or_si128(_mm_andnot_si128(cond1, mstate[1]), _mm_and_si128(cond1, renorm1));
 		mstate[2]=_mm_or_si128(_mm_andnot_si128(cond2, mstate[2]), _mm_and_si128(cond2, renorm2));
 		mstate[3]=_mm_or_si128(_mm_andnot_si128(cond3, mstate[3]), _mm_and_si128(cond3, renorm3));
-		//mstate[0]=_mm_blendv_epi8(mstate[0], renorm0, cond0);
-		//mstate[1]=_mm_blendv_epi8(mstate[1], renorm1, cond1);
-		//mstate[2]=_mm_blendv_epi8(mstate[2], renorm2, cond2);
-		//mstate[3]=_mm_blendv_epi8(mstate[3], renorm3, cond3);
 	}
 	*pstreamptr=(uint8_t*)(size_t)streamptr;
 }
@@ -881,6 +878,9 @@ int codec_l1_ssse3(int argc, char **argv)
 	__m128i *L1preds=0;
 	float *L1weights=0;
 	int kx, ky;
+#ifdef USE_YCBCR
+	__m128i mlossytrans[9], ilossytrans[9];
+#endif
 
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
@@ -903,7 +903,7 @@ int codec_l1_ssse3(int argc, char **argv)
 	effort&=3;
 	dist=argc<5?1:atoi(argv[4]);
 	if(dist>1)
-		CLAMP2(dist, 4, 31);
+		CLAMP2(dist, 3, 31);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");
@@ -1056,7 +1056,10 @@ int codec_l1_ssse3(int argc, char **argv)
 		interleave_blocks_fwd(image, iw, ih, interleaved+isize);//reuse memory: read 8-bit pixel, write 16-bit context<<8|residual
 		guide_save(interleaved+isize, ixcount, blockh);
 		prof_checkpoint(usize, "interleave");
-		{//analysis
+#ifdef USE_YCBCR
+		if(dist<=1)//lossless analysis
+#endif
+		{
 			int kx, ky;
 			ALIGN(32) long long counters[OCH_COUNT]={0};
 			__m128i mcounters[OCH_COUNT];//64-bit
@@ -1064,7 +1067,7 @@ int codec_l1_ssse3(int argc, char **argv)
 			__m128i wordmask=_mm_set_epi32(0, 0xFFFF, 0, 0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
+			for(ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
 				__m128i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
@@ -1272,6 +1275,27 @@ int codec_l1_ssse3(int argc, char **argv)
 	{
 		dist_rcp=_mm_set1_epi16(((1<<16)+dist-1)/dist);//x/dist  ->  {x*=inv; x=(x>>16)+((uint32_t)x>>31);}
 		mdist=_mm_set1_epi16(dist);
+#ifdef USE_YCBCR
+		mlossytrans[0]=_mm_set1_epi16((int16_t)(+0.299		*0x4000+0.5));
+		mlossytrans[1]=_mm_set1_epi16((int16_t)(+0.587		*0x4000+0.5));
+		mlossytrans[2]=_mm_set1_epi16((int16_t)(+0.114		*0x4000+0.5));
+		mlossytrans[3]=_mm_set1_epi16((int16_t)(-0.168736	*0x4000+0.5));
+		mlossytrans[4]=_mm_set1_epi16((int16_t)(-0.331264	*0x4000+0.5));
+		mlossytrans[5]=_mm_set1_epi16((int16_t)(+0.5		*0x4000+0.5));
+		mlossytrans[6]=_mm_set1_epi16((int16_t)(+0.5		*0x4000+0.5));
+		mlossytrans[7]=_mm_set1_epi16((int16_t)(-0.418688	*0x4000+0.5));
+		mlossytrans[8]=_mm_set1_epi16((int16_t)(-0.081312	*0x4000+0.5));
+
+		ilossytrans[0]=_mm_set1_epi16((int16_t)(+1		*0x4000+0.5));
+		ilossytrans[1]=_mm_set1_epi16((int16_t)(+0		*0x4000+0.5));
+		ilossytrans[2]=_mm_set1_epi16((int16_t)(+1.402		*0x4000+0.5));
+		ilossytrans[3]=_mm_set1_epi16((int16_t)(+1		*0x4000+0.5));
+		ilossytrans[4]=_mm_set1_epi16((int16_t)(-0.344136	*0x4000+0.5));
+		ilossytrans[5]=_mm_set1_epi16((int16_t)(-0.714136	*0x4000+0.5));
+		ilossytrans[6]=_mm_set1_epi16((int16_t)(+1		*0x4000+0.5));
+		ilossytrans[7]=_mm_set1_epi16((int16_t)(+1.772		*0x4000+0.5));
+		ilossytrans[8]=_mm_set1_epi16((int16_t)(+0		*0x4000+0.5));
+#endif
 	}
 	memset(myuv, 0, sizeof(myuv));
 	ctxptr=interleaved;
@@ -1341,18 +1365,6 @@ int codec_l1_ssse3(int argc, char **argv)
 				__m128 fu2=_mm_cvtepi32_ps(_mm_and_si128(eW[3], wordmask)), fu3=_mm_cvtepi32_ps(_mm_srli_epi32(eW[3], 16));
 				__m128 fv0=_mm_cvtepi32_ps(_mm_and_si128(eW[4], wordmask)), fv1=_mm_cvtepi32_ps(_mm_srli_epi32(eW[4], 16));
 				__m128 fv2=_mm_cvtepi32_ps(_mm_and_si128(eW[5], wordmask)), fv3=_mm_cvtepi32_ps(_mm_srli_epi32(eW[5], 16));
-				fy0=_mm_add_ps(fy0, one);
-				fy1=_mm_add_ps(fy1, one);
-				fy2=_mm_add_ps(fy2, one);
-				fy3=_mm_add_ps(fy3, one);
-				fu0=_mm_add_ps(fu0, one);
-				fu1=_mm_add_ps(fu1, one);
-				fu2=_mm_add_ps(fu2, one);
-				fu3=_mm_add_ps(fu3, one);
-				fv0=_mm_add_ps(fv0, one);
-				fv1=_mm_add_ps(fv1, one);
-				fv2=_mm_add_ps(fv2, one);
-				fv3=_mm_add_ps(fv3, one);
 				fy0=_mm_mul_ps(fy0, fy0);
 				fy1=_mm_mul_ps(fy1, fy1);
 				fy2=_mm_mul_ps(fy2, fy2);
@@ -1365,6 +1377,18 @@ int codec_l1_ssse3(int argc, char **argv)
 				fv1=_mm_mul_ps(fv1, fv1);
 				fv2=_mm_mul_ps(fv2, fv2);
 				fv3=_mm_mul_ps(fv3, fv3);
+				fy0=_mm_add_ps(fy0, one);
+				fy1=_mm_add_ps(fy1, one);
+				fy2=_mm_add_ps(fy2, one);
+				fy3=_mm_add_ps(fy3, one);
+				fu0=_mm_add_ps(fu0, one);
+				fu1=_mm_add_ps(fu1, one);
+				fu2=_mm_add_ps(fu2, one);
+				fu3=_mm_add_ps(fu3, one);
+				fv0=_mm_add_ps(fv0, one);
+				fv1=_mm_add_ps(fv1, one);
+				fv2=_mm_add_ps(fv2, one);
+				fv3=_mm_add_ps(fv3, one);
 				cy0=_mm_srli_epi32(_mm_castps_si128(fy0), 23);
 				cy1=_mm_srli_epi32(_mm_castps_si128(fy1), 23);
 				cy2=_mm_srli_epi32(_mm_castps_si128(fy2), 23);
@@ -1451,7 +1475,7 @@ int codec_l1_ssse3(int argc, char **argv)
 					/*
 					effort 1
 					0	N+W-NW
-					1	N
+					1	2*N-NN
 					2	W
 					3	NE
 					*/
@@ -1464,13 +1488,13 @@ int codec_l1_ssse3(int argc, char **argv)
 					L1preds[0*6+4]=predV[0];
 					L1preds[0*6+5]=predV[1];
 
-					//N
-					L1preds[1*6+0]=N[0];
-					L1preds[1*6+1]=N[1];
-					L1preds[1*6+2]=N[2];
-					L1preds[1*6+3]=N[3];
-					L1preds[1*6+4]=N[4];
-					L1preds[1*6+5]=N[5];
+					//2*N-NN
+					L1preds[1*6+0]=_mm_sub_epi16(_mm_add_epi16(N[0], N[0]), _mm_load_si128((__m128i*)rows[2]+0+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+1]=_mm_sub_epi16(_mm_add_epi16(N[1], N[1]), _mm_load_si128((__m128i*)rows[2]+1+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+2]=_mm_sub_epi16(_mm_add_epi16(N[2], N[2]), _mm_load_si128((__m128i*)rows[2]+2+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+3]=_mm_sub_epi16(_mm_add_epi16(N[3], N[3]), _mm_load_si128((__m128i*)rows[2]+3+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+4]=_mm_sub_epi16(_mm_add_epi16(N[4], N[4]), _mm_load_si128((__m128i*)rows[2]+4+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+5]=_mm_sub_epi16(_mm_add_epi16(N[5], N[5]), _mm_load_si128((__m128i*)rows[2]+5+(0+0*NCH)*NROWS*NVAL));
 
 					//W
 					L1preds[2*6+0]=W[0];
@@ -1875,12 +1899,6 @@ int codec_l1_ssse3(int argc, char **argv)
 					predV[0]=_mm_or_si128(t[0x4], t[0xA]);
 					predV[1]=_mm_or_si128(t[0x5], t[0xB]);
 #endif
-					//predY[0]=_mm_blend_epi16(t[0x0], t[0x6], 0xAA);
-					//predY[1]=_mm_blend_epi16(t[0x1], t[0x7], 0xAA);
-					//predU[0]=_mm_blend_epi16(t[0x2], t[0x8], 0xAA);
-					//predU[1]=_mm_blend_epi16(t[0x3], t[0x9], 0xAA);
-					//predV[0]=_mm_blend_epi16(t[0x4], t[0xA], 0xAA);
-					//predV[1]=_mm_blend_epi16(t[0x5], t[0xB], 0xAA);
 
 
 					//loosen pred range
@@ -2295,252 +2313,255 @@ int codec_l1_ssse3(int argc, char **argv)
 				predU[0]=_mm_min_epi16(predU[0], umax[0]); predU[1]=_mm_min_epi16(predU[1], umax[1]);
 				predV[0]=_mm_min_epi16(predV[0], vmax[0]); predV[1]=_mm_min_epi16(predV[1], vmax[1]);
 			}
-			if(fwd)
+#ifdef USE_YCBCR
+			if(dist>1)
 			{
-				__m128i ctxblendmask=_mm_set1_epi16(255);
-				myuv[0]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+yidx)), half8);//load yuv
-				myuv[2]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+uidx)), half8);
-				myuv[4]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+vidx)), half8);
-				myuv[1]=_mm_srai_epi16(myuv[0], 8);
-				myuv[3]=_mm_srai_epi16(myuv[2], 8);
-				myuv[5]=_mm_srai_epi16(myuv[4], 8);
-
-				myuv[0]=_mm_slli_epi16(myuv[0], 8);
-				myuv[2]=_mm_slli_epi16(myuv[2], 8);
-				myuv[4]=_mm_slli_epi16(myuv[4], 8);
-
-				myuv[0]=_mm_srai_epi16(myuv[0], 8);
-				myuv[2]=_mm_srai_epi16(myuv[2], 8);
-				myuv[4]=_mm_srai_epi16(myuv[4], 8);
-				//myuv[1]=_mm_cvtepi8_epi16(_mm_shuffle_epi32(myuv[0], _MM_SHUFFLE(1, 0, 3, 2)));//SSE4.1
-				//myuv[3]=_mm_cvtepi8_epi16(_mm_shuffle_epi32(myuv[2], _MM_SHUFFLE(1, 0, 3, 2)));
-				//myuv[5]=_mm_cvtepi8_epi16(_mm_shuffle_epi32(myuv[4], _MM_SHUFFLE(1, 0, 3, 2)));
-				//myuv[0]=_mm_cvtepi8_epi16(myuv[0]);
-				//myuv[2]=_mm_cvtepi8_epi16(myuv[2]);
-				//myuv[4]=_mm_cvtepi8_epi16(myuv[4]);
-
-				//predict Y
-				msyms[0]=_mm_sub_epi16(myuv[0*2+0], predY[0]);//sub pred
-				msyms[1]=_mm_sub_epi16(myuv[0*2+1], predY[1]);
-				if(dist>1)
+				__m128i msyms0[6];
+				if(fwd)//lossy enc
 				{
 #ifdef ENABLE_GUIDE
-					ALIGN(32) uint16_t diff[8];
-					__m128i modified, mdiff0, mdiff1;
-					__m128i yuv0=myuv[0*2+0];
-					__m128i yuv1=myuv[0*2+1];
+					ALIGN(16) uint16_t diff[3*NCODERS];
+					__m128i rgb0[6], tmp[6], modified[3], mdiff[6];
 #endif
-					__m128i t0=_mm_srai_epi16(msyms[0], 15);
-					__m128i t1=_mm_srai_epi16(msyms[1], 15);
-					msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
-					msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
-					msyms[0]=_mm_sub_epi16(msyms[0], t0);
-					msyms[1]=_mm_sub_epi16(msyms[1], t1);
-					myuv[0*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[0*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
-					myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
-					myuv[0*2+0]=_mm_max_epi16(myuv[0*2+0], amin);
-					myuv[0*2+1]=_mm_max_epi16(myuv[0*2+1], amin);
-					myuv[0*2+0]=_mm_min_epi16(myuv[0*2+0], amax);
-					myuv[0*2+1]=_mm_min_epi16(myuv[0*2+1], amax);
+					__m128i mrgb[6], msyms1[6];
+					__m128i ctxblendmask=_mm_set1_epi16(255);
+					mrgb[0]=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8);//load yuv
+					mrgb[2]=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8);
+					mrgb[4]=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+2), half8);
+					mrgb[1]=_mm_srai_epi16(mrgb[0], 8);
+					mrgb[3]=_mm_srai_epi16(mrgb[2], 8);
+					mrgb[5]=_mm_srai_epi16(mrgb[4], 8);
+					mrgb[0]=_mm_slli_epi16(mrgb[0], 8);
+					mrgb[2]=_mm_slli_epi16(mrgb[2], 8);
+					mrgb[4]=_mm_slli_epi16(mrgb[4], 8);
+					mrgb[0]=_mm_srai_epi16(mrgb[0], 8);
+					mrgb[2]=_mm_srai_epi16(mrgb[2], 8);
+					mrgb[4]=_mm_srai_epi16(mrgb[4], 8);
 #ifdef ENABLE_GUIDE
-					modified=_mm_or_si128(_mm_slli_epi16(myuv[0*2+1], 8), _mm_and_si128(myuv[0*2+0], _mm_set1_epi16(255)));
-					//modified=_mm_packs_epi16(myuv[0*2+0], myuv[0*2+1]);
-					modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
-					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+yidx), modified);
+					memcpy(rgb0, mrgb, sizeof(rgb0));
+#endif
 
-					mdiff0=_mm_sub_epi16(yuv0, myuv[0*2+0]);
-					mdiff1=_mm_sub_epi16(yuv1, myuv[0*2+1]);
-					mdiff0=_mm_abs_epi16(mdiff0);
-					mdiff1=_mm_abs_epi16(mdiff1);
-					mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
-					mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
-					mdiff0=_mm_add_epi16(mdiff0, mdiff1);
-					_mm_store_si128((__m128i*)diff, mdiff0);
+					//forward transform
+					mrgb[0]=_mm_slli_epi16(mrgb[0], 4);
+					mrgb[1]=_mm_slli_epi16(mrgb[1], 4);
+					mrgb[2]=_mm_slli_epi16(mrgb[2], 4);
+					mrgb[3]=_mm_slli_epi16(mrgb[3], 4);
+					mrgb[4]=_mm_slli_epi16(mrgb[4], 4);
+					mrgb[5]=_mm_slli_epi16(mrgb[5], 4);
+					myuv[0]=_mm_mulhi_epi16(mlossytrans[0+0], mrgb[0+0*2]);
+					myuv[1]=_mm_mulhi_epi16(mlossytrans[0+0], mrgb[1+0*2]);
+					myuv[2]=_mm_mulhi_epi16(mlossytrans[3+0], mrgb[0+0*2]);
+					myuv[3]=_mm_mulhi_epi16(mlossytrans[3+0], mrgb[1+0*2]);
+					myuv[4]=_mm_mulhi_epi16(mlossytrans[6+0], mrgb[0+0*2]);
+					myuv[5]=_mm_mulhi_epi16(mlossytrans[6+0], mrgb[1+0*2]);
+					myuv[0]=_mm_add_epi16(myuv[0], _mm_mulhi_epi16(mlossytrans[0+1], mrgb[0+1*2]));
+					myuv[1]=_mm_add_epi16(myuv[1], _mm_mulhi_epi16(mlossytrans[0+1], mrgb[1+1*2]));
+					myuv[2]=_mm_add_epi16(myuv[2], _mm_mulhi_epi16(mlossytrans[3+1], mrgb[0+1*2]));
+					myuv[3]=_mm_add_epi16(myuv[3], _mm_mulhi_epi16(mlossytrans[3+1], mrgb[1+1*2]));
+					myuv[4]=_mm_add_epi16(myuv[4], _mm_mulhi_epi16(mlossytrans[6+1], mrgb[0+1*2]));
+					myuv[5]=_mm_add_epi16(myuv[5], _mm_mulhi_epi16(mlossytrans[6+1], mrgb[1+1*2]));
+
+					myuv[0]=_mm_add_epi16(myuv[0], _mm_mulhi_epi16(mlossytrans[0+2], mrgb[0+2*2]));
+					myuv[1]=_mm_add_epi16(myuv[1], _mm_mulhi_epi16(mlossytrans[0+2], mrgb[1+2*2]));
+					myuv[2]=_mm_add_epi16(myuv[2], _mm_mulhi_epi16(mlossytrans[3+2], mrgb[0+2*2]));
+					myuv[3]=_mm_add_epi16(myuv[3], _mm_mulhi_epi16(mlossytrans[3+2], mrgb[1+2*2]));
+					myuv[4]=_mm_add_epi16(myuv[4], _mm_mulhi_epi16(mlossytrans[6+2], mrgb[0+2*2]));
+					myuv[5]=_mm_add_epi16(myuv[5], _mm_mulhi_epi16(mlossytrans[6+2], mrgb[1+2*2]));
+					myuv[0]=_mm_srai_epi16(myuv[0], 2);
+					myuv[1]=_mm_srai_epi16(myuv[1], 2);
+					myuv[2]=_mm_srai_epi16(myuv[2], 2);
+					myuv[3]=_mm_srai_epi16(myuv[3], 2);
+					myuv[4]=_mm_srai_epi16(myuv[4], 2);
+					myuv[5]=_mm_srai_epi16(myuv[5], 2);
+
+					//subtract pred
+					msyms0[0]=_mm_sub_epi16(myuv[0], predY[0]);
+					msyms0[1]=_mm_sub_epi16(myuv[1], predY[1]);
+					msyms0[2]=_mm_sub_epi16(myuv[2], predU[0]);
+					msyms0[3]=_mm_sub_epi16(myuv[3], predU[1]);
+					msyms0[4]=_mm_sub_epi16(myuv[4], predV[0]);
+					msyms0[5]=_mm_sub_epi16(myuv[5], predV[1]);
+
+					//quantize and reconstruct
+					__m128i cond0=_mm_srai_epi16(msyms0[0], 15);
+					__m128i cond1=_mm_srai_epi16(msyms0[1], 15);
+					__m128i cond2=_mm_srai_epi16(msyms0[2], 15);
+					__m128i cond3=_mm_srai_epi16(msyms0[3], 15);
+					__m128i cond4=_mm_srai_epi16(msyms0[4], 15);
+					__m128i cond5=_mm_srai_epi16(msyms0[5], 15);
+					msyms0[0]=_mm_mulhi_epi16(msyms0[0], dist_rcp);
+					msyms0[1]=_mm_mulhi_epi16(msyms0[1], dist_rcp);
+					msyms0[2]=_mm_mulhi_epi16(msyms0[2], dist_rcp);
+					msyms0[3]=_mm_mulhi_epi16(msyms0[3], dist_rcp);
+					msyms0[4]=_mm_mulhi_epi16(msyms0[4], dist_rcp);
+					msyms0[5]=_mm_mulhi_epi16(msyms0[5], dist_rcp);
+					msyms0[0]=_mm_sub_epi16(msyms0[0], cond0);//(x*inv>>16)-(x>>31)
+					msyms0[1]=_mm_sub_epi16(msyms0[1], cond1);
+					msyms0[2]=_mm_sub_epi16(msyms0[2], cond2);
+					msyms0[3]=_mm_sub_epi16(msyms0[3], cond3);
+					msyms0[4]=_mm_sub_epi16(msyms0[4], cond4);
+					msyms0[5]=_mm_sub_epi16(msyms0[5], cond5);
+					myuv[0]=_mm_mullo_epi16(msyms0[0], mdist);
+					myuv[1]=_mm_mullo_epi16(msyms0[1], mdist);
+					myuv[2]=_mm_mullo_epi16(msyms0[2], mdist);
+					myuv[3]=_mm_mullo_epi16(msyms0[3], mdist);
+					myuv[4]=_mm_mullo_epi16(msyms0[4], mdist);
+					myuv[5]=_mm_mullo_epi16(msyms0[5], mdist);
+					myuv[0]=_mm_add_epi16(myuv[0], predY[0]);
+					myuv[1]=_mm_add_epi16(myuv[1], predY[1]);
+					myuv[2]=_mm_add_epi16(myuv[2], predU[0]);
+					myuv[3]=_mm_add_epi16(myuv[3], predU[1]);
+					myuv[4]=_mm_add_epi16(myuv[4], predV[0]);
+					myuv[5]=_mm_add_epi16(myuv[5], predV[1]);
+					//myuv[0]=_mm_max_epi16(myuv[0], _mm_set1_epi16(-128));
+					//myuv[1]=_mm_max_epi16(myuv[1], _mm_set1_epi16(-128));
+					//myuv[2]=_mm_max_epi16(myuv[2], _mm_set1_epi16(-128));
+					//myuv[3]=_mm_max_epi16(myuv[3], _mm_set1_epi16(-128));
+					//myuv[4]=_mm_max_epi16(myuv[4], _mm_set1_epi16(-128));
+					//myuv[5]=_mm_max_epi16(myuv[5], _mm_set1_epi16(-128));
+					//myuv[0]=_mm_min_epi16(myuv[0], _mm_set1_epi16(127));
+					//myuv[1]=_mm_min_epi16(myuv[1], _mm_set1_epi16(127));
+					//myuv[2]=_mm_min_epi16(myuv[2], _mm_set1_epi16(127));
+					//myuv[3]=_mm_min_epi16(myuv[3], _mm_set1_epi16(127));
+					//myuv[4]=_mm_min_epi16(myuv[4], _mm_set1_epi16(127));
+					//myuv[5]=_mm_min_epi16(myuv[5], _mm_set1_epi16(127));
+
+					msyms1[0]=_mm_sub_epi16(msyms0[0], amin);
+					msyms1[1]=_mm_sub_epi16(msyms0[1], amin);
+					msyms1[2]=_mm_sub_epi16(msyms0[2], amin);
+					msyms1[3]=_mm_sub_epi16(msyms0[3], amin);
+					msyms1[4]=_mm_sub_epi16(msyms0[4], amin);
+					msyms1[5]=_mm_sub_epi16(msyms0[5], amin);
+#ifdef _MSC_VER
+					int mask=0;
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[0], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[1], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[2], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[3], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[4], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(msyms1[5], _mm_set1_epi16(255)));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[0]));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[1]));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[2]));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[3]));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[4]));
+					mask|=_mm_movemask_epi8(_mm_cmpgt_epi16(_mm_setzero_si128(), msyms1[5]));
+					if(mask)
+						CRASH("");
+#ifdef ENABLE_GUIDE
+					tmp[0]=_mm_slli_epi16(myuv[0], 4);
+					tmp[1]=_mm_slli_epi16(myuv[1], 4);
+					tmp[2]=_mm_slli_epi16(myuv[2], 4);
+					tmp[3]=_mm_slli_epi16(myuv[3], 4);
+					tmp[4]=_mm_slli_epi16(myuv[4], 4);
+					tmp[5]=_mm_slli_epi16(myuv[5], 4);
+					mrgb[0]=_mm_mulhi_epi16(ilossytrans[0+0], tmp[0+0*2]);
+					mrgb[1]=_mm_mulhi_epi16(ilossytrans[0+0], tmp[1+0*2]);
+					mrgb[2]=_mm_mulhi_epi16(ilossytrans[3+0], tmp[0+0*2]);
+					mrgb[3]=_mm_mulhi_epi16(ilossytrans[3+0], tmp[1+0*2]);
+					mrgb[4]=_mm_mulhi_epi16(ilossytrans[6+0], tmp[0+0*2]);
+					mrgb[5]=_mm_mulhi_epi16(ilossytrans[6+0], tmp[1+0*2]);
+					mrgb[0]=_mm_add_epi16(mrgb[0], _mm_mulhi_epi16(ilossytrans[0+1], tmp[0+1*2]));
+					mrgb[1]=_mm_add_epi16(mrgb[1], _mm_mulhi_epi16(ilossytrans[0+1], tmp[1+1*2]));
+					mrgb[2]=_mm_add_epi16(mrgb[2], _mm_mulhi_epi16(ilossytrans[3+1], tmp[0+1*2]));
+					mrgb[3]=_mm_add_epi16(mrgb[3], _mm_mulhi_epi16(ilossytrans[3+1], tmp[1+1*2]));
+					mrgb[4]=_mm_add_epi16(mrgb[4], _mm_mulhi_epi16(ilossytrans[6+1], tmp[0+1*2]));
+					mrgb[5]=_mm_add_epi16(mrgb[5], _mm_mulhi_epi16(ilossytrans[6+1], tmp[1+1*2]));
+
+					mrgb[0]=_mm_add_epi16(mrgb[0], _mm_mulhi_epi16(ilossytrans[0+2], tmp[0+2*2]));
+					mrgb[1]=_mm_add_epi16(mrgb[1], _mm_mulhi_epi16(ilossytrans[0+2], tmp[1+2*2]));
+					mrgb[2]=_mm_add_epi16(mrgb[2], _mm_mulhi_epi16(ilossytrans[3+2], tmp[0+2*2]));
+					mrgb[3]=_mm_add_epi16(mrgb[3], _mm_mulhi_epi16(ilossytrans[3+2], tmp[1+2*2]));
+					mrgb[4]=_mm_add_epi16(mrgb[4], _mm_mulhi_epi16(ilossytrans[6+2], tmp[0+2*2]));
+					mrgb[5]=_mm_add_epi16(mrgb[5], _mm_mulhi_epi16(ilossytrans[6+2], tmp[1+2*2]));
+					mrgb[0]=_mm_srai_epi16(mrgb[0], 2);
+					mrgb[1]=_mm_srai_epi16(mrgb[1], 2);
+					mrgb[2]=_mm_srai_epi16(mrgb[2], 2);
+					mrgb[3]=_mm_srai_epi16(mrgb[3], 2);
+					mrgb[4]=_mm_srai_epi16(mrgb[4], 2);
+					mrgb[5]=_mm_srai_epi16(mrgb[5], 2);
+					mrgb[0]=_mm_max_epi16(mrgb[0], _mm_set1_epi16(-128));
+					mrgb[1]=_mm_max_epi16(mrgb[1], _mm_set1_epi16(-128));
+					mrgb[2]=_mm_max_epi16(mrgb[2], _mm_set1_epi16(-128));
+					mrgb[3]=_mm_max_epi16(mrgb[3], _mm_set1_epi16(-128));
+					mrgb[4]=_mm_max_epi16(mrgb[4], _mm_set1_epi16(-128));
+					mrgb[5]=_mm_max_epi16(mrgb[5], _mm_set1_epi16(-128));
+					mrgb[0]=_mm_min_epi16(mrgb[0], _mm_set1_epi16(127));
+					mrgb[1]=_mm_min_epi16(mrgb[1], _mm_set1_epi16(127));
+					mrgb[2]=_mm_min_epi16(mrgb[2], _mm_set1_epi16(127));
+					mrgb[3]=_mm_min_epi16(mrgb[3], _mm_set1_epi16(127));
+					mrgb[4]=_mm_min_epi16(mrgb[4], _mm_set1_epi16(127));
+					mrgb[5]=_mm_min_epi16(mrgb[5], _mm_set1_epi16(127));
+					modified[0]=_mm_or_si128(_mm_slli_epi16(mrgb[1], 8), _mm_and_si128(mrgb[0], _mm_set1_epi16(255)));
+					modified[1]=_mm_or_si128(_mm_slli_epi16(mrgb[3], 8), _mm_and_si128(mrgb[2], _mm_set1_epi16(255)));
+					modified[2]=_mm_or_si128(_mm_slli_epi16(mrgb[5], 8), _mm_and_si128(mrgb[4], _mm_set1_epi16(255)));
+					modified[0]=_mm_xor_si128(modified[0], _mm_set1_epi8(-128));
+					modified[1]=_mm_xor_si128(modified[1], _mm_set1_epi8(-128));
+					modified[2]=_mm_xor_si128(modified[2], _mm_set1_epi8(-128));
+					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+0*NCODERS), modified[0]);
+					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+1*NCODERS), modified[1]);
+					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+2*NCODERS), modified[2]);
+
+					mdiff[0]=_mm_sub_epi16(rgb0[0], mrgb[0]);
+					mdiff[1]=_mm_sub_epi16(rgb0[1], mrgb[1]);
+					mdiff[2]=_mm_sub_epi16(rgb0[2], mrgb[2]);
+					mdiff[3]=_mm_sub_epi16(rgb0[3], mrgb[3]);
+					mdiff[4]=_mm_sub_epi16(rgb0[4], mrgb[4]);
+					mdiff[5]=_mm_sub_epi16(rgb0[5], mrgb[5]);
+					mdiff[0]=_mm_mullo_epi16(mdiff[0], mdiff[0]);
+					mdiff[1]=_mm_mullo_epi16(mdiff[1], mdiff[1]);
+					mdiff[2]=_mm_mullo_epi16(mdiff[2], mdiff[2]);
+					mdiff[3]=_mm_mullo_epi16(mdiff[3], mdiff[3]);
+					mdiff[4]=_mm_mullo_epi16(mdiff[4], mdiff[4]);
+					mdiff[5]=_mm_mullo_epi16(mdiff[5], mdiff[5]);
+					memcpy(diff, mdiff, sizeof(diff));
+					for(int k=0;k<NCODERS;++k)
 					{
-						int k;
-						for(k=0;k<_countof(diff);++k)
-							g_sqe[0]+=diff[k];
+						g_sqe[0]+=diff[k+0*NCODERS];
+						g_sqe[1]+=diff[k+1*NCODERS];
+						g_sqe[2]+=diff[k+2*NCODERS];
 					}
 #endif
-				}
-				W[0]=myuv[0*2+0];
-				W[1]=myuv[0*2+1];
-				_mm_store_si128((__m128i*)rows[0]+0+0+0*12, myuv[0*2+0]);//store Y neighbors
-				_mm_store_si128((__m128i*)rows[0]+0+1+0*12, myuv[0*2+1]);
-				ecurr[0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));//ecurr = pack_sign(yuv-pred)
-				ecurr[1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms[0]=_mm_sub_epi16(msyms[0], amin);
-				msyms[1]=_mm_sub_epi16(msyms[1], amin);
-				ctxY[0]=_mm_slli_epi16(ctxY[0], 8);
-				ctxY[1]=_mm_slli_epi16(ctxY[1], 8);
-				msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
-				msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
-				ctxY[0]=_mm_or_si128(ctxY[0], msyms[0]);
-				ctxY[1]=_mm_or_si128(ctxY[1], msyms[1]);
-				//ctxY[0]=_mm_blendv_epi8(ctxY[0], msyms[0], ctxblendmask);
-				//ctxY[1]=_mm_blendv_epi8(ctxY[1], msyms[1], ctxblendmask);
-				_mm_store_si128((__m128i*)syms+0*2+0, ctxY[0]);
-				_mm_store_si128((__m128i*)syms+0*2+1, ctxY[1]);
-				_mm_store_si128((__m128i*)ctxptr+0*2+0, ctxY[0]);//store Y  ctx|residuals
-				_mm_store_si128((__m128i*)ctxptr+0*2+1, ctxY[1]);
-				
-				//predict U
-				moffset[0]=_mm_and_si128(myuv[0*2+0], uhelpmask);
-				moffset[1]=_mm_and_si128(myuv[0*2+1], uhelpmask);
-				predU[0]=_mm_add_epi16(predU[0], moffset[0]);
-				predU[1]=_mm_add_epi16(predU[1], moffset[1]);
-				predU[0]=_mm_max_epi16(predU[0], amin);
-				predU[1]=_mm_max_epi16(predU[1], amin);
-				predU[0]=_mm_min_epi16(predU[0], amax);
-				predU[1]=_mm_min_epi16(predU[1], amax);
-
-				msyms[0]=_mm_sub_epi16(myuv[1*2+0], predU[0]);
-				msyms[1]=_mm_sub_epi16(myuv[1*2+1], predU[1]);
-				if(dist>1)
-				{
-#ifdef ENABLE_GUIDE
-					ALIGN(32) uint16_t diff[8];
-					__m128i modified, mdiff0, mdiff1;
-					__m128i yuv0=myuv[1*2+0];
-					__m128i yuv1=myuv[1*2+1];
 #endif
-					__m128i t0=_mm_srai_epi16(msyms[0], 15);
-					__m128i t1=_mm_srai_epi16(msyms[1], 15);
-					msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
-					msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
-					msyms[0]=_mm_sub_epi16(msyms[0], t0);
-					msyms[1]=_mm_sub_epi16(msyms[1], t1);
-					myuv[1*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[1*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
-					myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
-					myuv[1*2+0]=_mm_max_epi16(myuv[1*2+0], amin);
-					myuv[1*2+1]=_mm_max_epi16(myuv[1*2+1], amin);
-					myuv[1*2+0]=_mm_min_epi16(myuv[1*2+0], amax);
-					myuv[1*2+1]=_mm_min_epi16(myuv[1*2+1], amax);
-#ifdef ENABLE_GUIDE
-					modified=_mm_or_si128(_mm_slli_epi16(myuv[1*2+1], 8), _mm_and_si128(myuv[1*2+0], _mm_set1_epi16(255)));
-					//modified=_mm_packs_epi16(myuv[1*2+0], myuv[1*2+1]);
-					modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
-					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+uidx), modified);
+					ctxU[0]=_mm_add_epi16(ctxU[0], mctxuoffset);
+					ctxU[1]=_mm_add_epi16(ctxU[1], mctxuoffset);
+					ctxV[0]=_mm_add_epi16(ctxV[0], mctxvoffset);
+					ctxV[1]=_mm_add_epi16(ctxV[1], mctxvoffset);
+					ctxY[0]=_mm_slli_epi16(ctxY[0], 8);
+					ctxY[1]=_mm_slli_epi16(ctxY[1], 8);
+					ctxU[0]=_mm_slli_epi16(ctxU[0], 8);
+					ctxU[1]=_mm_slli_epi16(ctxU[1], 8);
+					ctxV[0]=_mm_slli_epi16(ctxV[0], 8);
+					ctxV[1]=_mm_slli_epi16(ctxV[1], 8);
+					ctxY[0]=_mm_or_si128(ctxY[0], _mm_and_si128(msyms1[0], ctxblendmask));
+					ctxY[1]=_mm_or_si128(ctxY[1], _mm_and_si128(msyms1[1], ctxblendmask));
+					ctxU[0]=_mm_or_si128(ctxU[0], _mm_and_si128(msyms1[2], ctxblendmask));
+					ctxU[1]=_mm_or_si128(ctxU[1], _mm_and_si128(msyms1[3], ctxblendmask));
+					ctxV[0]=_mm_or_si128(ctxV[0], _mm_and_si128(msyms1[4], ctxblendmask));
+					ctxV[1]=_mm_or_si128(ctxV[1], _mm_and_si128(msyms1[5], ctxblendmask));
+					_mm_store_si128((__m128i*)syms+0, ctxY[0]);
+					_mm_store_si128((__m128i*)syms+1, ctxY[1]);
+					_mm_store_si128((__m128i*)syms+2, ctxU[0]);
+					_mm_store_si128((__m128i*)syms+3, ctxU[1]);
+					_mm_store_si128((__m128i*)syms+4, ctxV[0]);
+					_mm_store_si128((__m128i*)syms+5, ctxV[1]);
+					_mm_store_si128((__m128i*)ctxptr+0, ctxY[0]);
+					_mm_store_si128((__m128i*)ctxptr+1, ctxY[1]);
+					_mm_store_si128((__m128i*)ctxptr+2, ctxU[0]);
+					_mm_store_si128((__m128i*)ctxptr+3, ctxU[1]);
+					_mm_store_si128((__m128i*)ctxptr+4, ctxV[0]);
+					_mm_store_si128((__m128i*)ctxptr+5, ctxV[1]);
 
-					mdiff0=_mm_sub_epi16(yuv0, myuv[1*2+0]);
-					mdiff1=_mm_sub_epi16(yuv1, myuv[1*2+1]);
-					mdiff0=_mm_abs_epi16(mdiff0);
-					mdiff1=_mm_abs_epi16(mdiff1);
-					mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
-					mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
-					mdiff0=_mm_add_epi16(mdiff0, mdiff1);
-					_mm_store_si128((__m128i*)diff, mdiff0);
+#if defined _MSC_VER && 0
+					for(int k=0;k<_countof(syms);++k)
 					{
-						int k;
-						for(k=0;k<_countof(diff);++k)
-							g_sqe[1]+=diff[k];
+						if(syms[k]>=3*NCTX*256)
+							LOG_ERROR("");
 					}
 #endif
-				}
-				ecurr[1*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
-				ecurr[1*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms[0]=_mm_sub_epi16(msyms[0], amin);
-				msyms[1]=_mm_sub_epi16(msyms[1], amin);
-				ctxU[0]=_mm_add_epi16(ctxU[0], mctxuoffset);
-				ctxU[1]=_mm_add_epi16(ctxU[1], mctxuoffset);
-				ctxU[0]=_mm_slli_epi16(ctxU[0], 8);
-				ctxU[1]=_mm_slli_epi16(ctxU[1], 8);
-				msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
-				msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
-				ctxU[0]=_mm_or_si128(ctxU[0], msyms[0]);
-				ctxU[1]=_mm_or_si128(ctxU[1], msyms[1]);
-				//ctxU[0]=_mm_blendv_epi8(ctxU[0], msyms[0], ctxblendmask);
-				//ctxU[1]=_mm_blendv_epi8(ctxU[1], msyms[1], ctxblendmask);
-				_mm_store_si128((__m128i*)syms+1*2+0, ctxU[0]);
-				_mm_store_si128((__m128i*)syms+1*2+1, ctxU[1]);
-				_mm_store_si128((__m128i*)ctxptr+1*2+0, ctxU[0]);//store U  ctx|residuals
-				_mm_store_si128((__m128i*)ctxptr+1*2+1, ctxU[1]);
-				
-				//predict V
-				moffset[2]=_mm_mullo_epi16(vc0, myuv[0]);
-				moffset[3]=_mm_mullo_epi16(vc0, myuv[1]);
-				moffset[2]=_mm_add_epi16(moffset[2], _mm_mullo_epi16(vc1, myuv[2]));
-				moffset[3]=_mm_add_epi16(moffset[3], _mm_mullo_epi16(vc1, myuv[3]));
-				moffset[2]=_mm_srai_epi16(moffset[2], 2);
-				moffset[3]=_mm_srai_epi16(moffset[3], 2);
-				predV[0]=_mm_add_epi16(predV[0], moffset[2]);
-				predV[1]=_mm_add_epi16(predV[1], moffset[3]);
-				predV[0]=_mm_max_epi16(predV[0], amin);
-				predV[1]=_mm_max_epi16(predV[1], amin);
-				predV[0]=_mm_min_epi16(predV[0], amax);
-				predV[1]=_mm_min_epi16(predV[1], amax);
+					ctxptr+=sizeof(short[3*NCODERS]);
 
-				msyms[0]=_mm_sub_epi16(myuv[2*2+0], predV[0]);
-				msyms[1]=_mm_sub_epi16(myuv[2*2+1], predV[1]);
-				if(dist>1)
-				{
-#ifdef ENABLE_GUIDE
-					ALIGN(32) uint16_t diff[8];
-					__m128i modified, mdiff0, mdiff1;
-					__m128i yuv0=myuv[2*2+0];
-					__m128i yuv1=myuv[2*2+1];
-#endif
-					__m128i t0=_mm_srai_epi16(msyms[0], 15);
-					__m128i t1=_mm_srai_epi16(msyms[1], 15);
-					msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
-					msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
-					msyms[0]=_mm_sub_epi16(msyms[0], t0);
-					msyms[1]=_mm_sub_epi16(msyms[1], t1);
-					myuv[2*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[2*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
-					myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
-					myuv[2*2+0]=_mm_max_epi16(myuv[2*2+0], amin);
-					myuv[2*2+1]=_mm_max_epi16(myuv[2*2+1], amin);
-					myuv[2*2+0]=_mm_min_epi16(myuv[2*2+0], amax);
-					myuv[2*2+1]=_mm_min_epi16(myuv[2*2+1], amax);
-#ifdef ENABLE_GUIDE
-					modified=_mm_or_si128(_mm_slli_epi16(myuv[2*2+1], 8), _mm_and_si128(myuv[2*2+0], _mm_set1_epi16(255)));
-					//modified=_mm_packs_epi16(myuv[2*2+0], myuv[2*2+1]);
-					modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
-					_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+vidx), modified);
-
-					mdiff0=_mm_sub_epi16(yuv0, myuv[2*2+0]);
-					mdiff1=_mm_sub_epi16(yuv1, myuv[2*2+1]);
-					mdiff0=_mm_abs_epi16(mdiff0);
-					mdiff1=_mm_abs_epi16(mdiff1);
-					mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
-					mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
-					mdiff0=_mm_add_epi16(mdiff0, mdiff1);
-					_mm_store_si128((__m128i*)diff, mdiff0);
-					{
-						int k;
-						for(k=0;k<_countof(diff);++k)
-							g_sqe[2]+=diff[k];
-					}
-#endif
-				}
-				ecurr[2*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
-				ecurr[2*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms[0]=_mm_sub_epi16(msyms[0], amin);
-				msyms[1]=_mm_sub_epi16(msyms[1], amin);
-				ctxV[0]=_mm_add_epi16(ctxV[0], mctxvoffset);
-				ctxV[1]=_mm_add_epi16(ctxV[1], mctxvoffset);
-				ctxV[0]=_mm_slli_epi16(ctxV[0], 8);
-				ctxV[1]=_mm_slli_epi16(ctxV[1], 8);
-				msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
-				msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
-				ctxV[0]=_mm_or_si128(ctxV[0], msyms[0]);
-				ctxV[1]=_mm_or_si128(ctxV[1], msyms[1]);
-				//ctxV[0]=_mm_blendv_epi8(ctxV[0], msyms[0], ctxblendmask);
-				//ctxV[1]=_mm_blendv_epi8(ctxV[1], msyms[1], ctxblendmask);
-				_mm_store_si128((__m128i*)syms+2*2+0, ctxV[0]);
-				_mm_store_si128((__m128i*)syms+2*2+1, ctxV[1]);
-				_mm_store_si128((__m128i*)ctxptr+2*2+0, ctxV[0]);//store V  ctx|residuals		ctxptr+NCODERS*(C*2+R)
-				_mm_store_si128((__m128i*)ctxptr+2*2+1, ctxV[1]);
-
-				{
 					int *pa, *pb, *pc, va, vb, vc;
-
 					pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 					pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 					pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
@@ -2558,240 +2579,634 @@ int codec_l1_ssse3(int argc, char **argv)
 					pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 					pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
 				}
-#if 0
-				++hists[syms[0*16+0x0]];
-				++hists[syms[1*16+0x0]];
-				++hists[syms[2*16+0x0]];
-				++hists[syms[0*16+0x1]];
-				++hists[syms[1*16+0x1]];
-				++hists[syms[2*16+0x1]];
-				++hists[syms[0*16+0x2]];
-				++hists[syms[1*16+0x2]];
-				++hists[syms[2*16+0x2]];
-				++hists[syms[0*16+0x3]];
-				++hists[syms[1*16+0x3]];
-				++hists[syms[2*16+0x3]];
-				++hists[syms[0*16+0x4]];
-				++hists[syms[1*16+0x4]];
-				++hists[syms[2*16+0x4]];
-				++hists[syms[0*16+0x5]];
-				++hists[syms[1*16+0x5]];
-				++hists[syms[2*16+0x5]];
-				++hists[syms[0*16+0x6]];
-				++hists[syms[1*16+0x6]];
-				++hists[syms[2*16+0x6]];
-				++hists[syms[0*16+0x7]];
-				++hists[syms[1*16+0x7]];
-				++hists[syms[2*16+0x7]];
-				++hists[syms[0*16+0x8]];
-				++hists[syms[1*16+0x8]];
-				++hists[syms[2*16+0x8]];
-				++hists[syms[0*16+0x9]];
-				++hists[syms[1*16+0x9]];
-				++hists[syms[2*16+0x9]];
-				++hists[syms[0*16+0xA]];
-				++hists[syms[1*16+0xA]];
-				++hists[syms[2*16+0xA]];
-				++hists[syms[0*16+0xB]];
-				++hists[syms[1*16+0xB]];
-				++hists[syms[2*16+0xB]];
-				++hists[syms[0*16+0xC]];
-				++hists[syms[1*16+0xC]];
-				++hists[syms[2*16+0xC]];
-				++hists[syms[0*16+0xD]];
-				++hists[syms[1*16+0xD]];
-				++hists[syms[2*16+0xD]];
-				++hists[syms[0*16+0xE]];
-				++hists[syms[1*16+0xE]];
-				++hists[syms[2*16+0xE]];
-				++hists[syms[0*16+0xF]];
-				++hists[syms[1*16+0xF]];
-				++hists[syms[2*16+0xF]];
-#endif
-				ctxptr+=sizeof(int16_t[3][NCODERS]);
-			}
-			else
-			{
-				//decode main
-				__m128i msyms8;
-				
-				//reconstruct Y
-				dec_yuv(mstate, ctxY, CDF2syms+((ptrdiff_t)NCTX*0<<PROBBITS), &streamptr, streamend, myuv+0*2);//residuals from [0 ~ 255]
-				dec_yuv(mstate, ctxU, CDF2syms+((ptrdiff_t)NCTX*1<<PROBBITS), &streamptr, streamend, myuv+1*2);
-				dec_yuv(mstate, ctxV, CDF2syms+((ptrdiff_t)NCTX*2<<PROBBITS), &streamptr, streamend, myuv+2*2);
+				else//lossy dec
+				{
+					__m128i mrgb[6], tmp[6], msyms8[3];
 
-				//yuv = (char)(sym+pred-128)	= (uint8_t)(sym+pred)-128
-				if(dist>1)
-				{
-					msyms[0]=_mm_add_epi16(myuv[0*2+0], amin);
-					msyms[1]=_mm_add_epi16(myuv[0*2+1], amin);
-					myuv[0*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[0*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
-					myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
-					myuv[0*2+0]=_mm_max_epi16(myuv[0*2+0], amin);
-					myuv[0*2+1]=_mm_max_epi16(myuv[0*2+1], amin);
-					myuv[0*2+0]=_mm_min_epi16(myuv[0*2+0], amax);
-					myuv[0*2+1]=_mm_min_epi16(myuv[0*2+1], amax);
+					dec_yuv(mstate, ctxY, CDF2syms+((ptrdiff_t)NCTX*0<<PROBBITS), &streamptr, streamend, myuv+0*2);//residuals from [0 ~ 255]
+					dec_yuv(mstate, ctxU, CDF2syms+((ptrdiff_t)NCTX*1<<PROBBITS), &streamptr, streamend, myuv+1*2);
+					dec_yuv(mstate, ctxV, CDF2syms+((ptrdiff_t)NCTX*2<<PROBBITS), &streamptr, streamend, myuv+2*2);
+
+					msyms0[0]=_mm_sub_epi16(myuv[0], _mm_set1_epi16(128));
+					msyms0[1]=_mm_sub_epi16(myuv[1], _mm_set1_epi16(128));
+					msyms0[2]=_mm_sub_epi16(myuv[2], _mm_set1_epi16(128));
+					msyms0[3]=_mm_sub_epi16(myuv[3], _mm_set1_epi16(128));
+					msyms0[4]=_mm_sub_epi16(myuv[4], _mm_set1_epi16(128));
+					msyms0[5]=_mm_sub_epi16(myuv[5], _mm_set1_epi16(128));
+					myuv[0]=_mm_mullo_epi16(msyms0[0], mdist);
+					myuv[1]=_mm_mullo_epi16(msyms0[1], mdist);
+					myuv[2]=_mm_mullo_epi16(msyms0[2], mdist);
+					myuv[3]=_mm_mullo_epi16(msyms0[3], mdist);
+					myuv[4]=_mm_mullo_epi16(msyms0[4], mdist);
+					myuv[5]=_mm_mullo_epi16(msyms0[5], mdist);
+
+					myuv[0]=_mm_add_epi16(myuv[0], predY[0]);
+					myuv[1]=_mm_add_epi16(myuv[1], predY[1]);
+					myuv[2]=_mm_add_epi16(myuv[2], predU[0]);
+					myuv[3]=_mm_add_epi16(myuv[3], predU[1]);
+					myuv[4]=_mm_add_epi16(myuv[4], predV[0]);
+					myuv[5]=_mm_add_epi16(myuv[5], predV[1]);
+					//myuv[0]=_mm_max_epi16(myuv[0], _mm_set1_epi16(-128));
+					//myuv[1]=_mm_max_epi16(myuv[1], _mm_set1_epi16(-128));
+					//myuv[2]=_mm_max_epi16(myuv[2], _mm_set1_epi16(-128));
+					//myuv[3]=_mm_max_epi16(myuv[3], _mm_set1_epi16(-128));
+					//myuv[4]=_mm_max_epi16(myuv[4], _mm_set1_epi16(-128));
+					//myuv[5]=_mm_max_epi16(myuv[5], _mm_set1_epi16(-128));
+					//myuv[0]=_mm_min_epi16(myuv[0], _mm_set1_epi16(127));
+					//myuv[1]=_mm_min_epi16(myuv[1], _mm_set1_epi16(127));
+					//myuv[2]=_mm_min_epi16(myuv[2], _mm_set1_epi16(127));
+					//myuv[3]=_mm_min_epi16(myuv[3], _mm_set1_epi16(127));
+					//myuv[4]=_mm_min_epi16(myuv[4], _mm_set1_epi16(127));
+					//myuv[5]=_mm_min_epi16(myuv[5], _mm_set1_epi16(127));
+
+					//inverse transform
+					tmp[0]=_mm_slli_epi16(myuv[0], 4);
+					tmp[1]=_mm_slli_epi16(myuv[1], 4);
+					tmp[2]=_mm_slli_epi16(myuv[2], 4);
+					tmp[3]=_mm_slli_epi16(myuv[3], 4);
+					tmp[4]=_mm_slli_epi16(myuv[4], 4);
+					tmp[5]=_mm_slli_epi16(myuv[5], 4);
+					mrgb[0]=_mm_mulhi_epi16(ilossytrans[0+0], tmp[0+0*2]);
+					mrgb[1]=_mm_mulhi_epi16(ilossytrans[0+0], tmp[1+0*2]);
+					mrgb[2]=_mm_mulhi_epi16(ilossytrans[3+0], tmp[0+0*2]);
+					mrgb[3]=_mm_mulhi_epi16(ilossytrans[3+0], tmp[1+0*2]);
+					mrgb[4]=_mm_mulhi_epi16(ilossytrans[6+0], tmp[0+0*2]);
+					mrgb[5]=_mm_mulhi_epi16(ilossytrans[6+0], tmp[1+0*2]);
+					mrgb[0]=_mm_add_epi16(mrgb[0], _mm_mulhi_epi16(ilossytrans[0+1], tmp[0+1*2]));
+					mrgb[1]=_mm_add_epi16(mrgb[1], _mm_mulhi_epi16(ilossytrans[0+1], tmp[1+1*2]));
+					mrgb[2]=_mm_add_epi16(mrgb[2], _mm_mulhi_epi16(ilossytrans[3+1], tmp[0+1*2]));
+					mrgb[3]=_mm_add_epi16(mrgb[3], _mm_mulhi_epi16(ilossytrans[3+1], tmp[1+1*2]));
+					mrgb[4]=_mm_add_epi16(mrgb[4], _mm_mulhi_epi16(ilossytrans[6+1], tmp[0+1*2]));
+					mrgb[5]=_mm_add_epi16(mrgb[5], _mm_mulhi_epi16(ilossytrans[6+1], tmp[1+1*2]));
+
+					mrgb[0]=_mm_add_epi16(mrgb[0], _mm_mulhi_epi16(ilossytrans[0+2], tmp[0+2*2]));
+					mrgb[1]=_mm_add_epi16(mrgb[1], _mm_mulhi_epi16(ilossytrans[0+2], tmp[1+2*2]));
+					mrgb[2]=_mm_add_epi16(mrgb[2], _mm_mulhi_epi16(ilossytrans[3+2], tmp[0+2*2]));
+					mrgb[3]=_mm_add_epi16(mrgb[3], _mm_mulhi_epi16(ilossytrans[3+2], tmp[1+2*2]));
+					mrgb[4]=_mm_add_epi16(mrgb[4], _mm_mulhi_epi16(ilossytrans[6+2], tmp[0+2*2]));
+					mrgb[5]=_mm_add_epi16(mrgb[5], _mm_mulhi_epi16(ilossytrans[6+2], tmp[1+2*2]));
+					mrgb[0]=_mm_srai_epi16(mrgb[0], 2);
+					mrgb[1]=_mm_srai_epi16(mrgb[1], 2);
+					mrgb[2]=_mm_srai_epi16(mrgb[2], 2);
+					mrgb[3]=_mm_srai_epi16(mrgb[3], 2);
+					mrgb[4]=_mm_srai_epi16(mrgb[4], 2);
+					mrgb[5]=_mm_srai_epi16(mrgb[5], 2);
+					mrgb[0]=_mm_max_epi16(mrgb[0], _mm_set1_epi16(-128));
+					mrgb[1]=_mm_max_epi16(mrgb[1], _mm_set1_epi16(-128));
+					mrgb[2]=_mm_max_epi16(mrgb[2], _mm_set1_epi16(-128));
+					mrgb[3]=_mm_max_epi16(mrgb[3], _mm_set1_epi16(-128));
+					mrgb[4]=_mm_max_epi16(mrgb[4], _mm_set1_epi16(-128));
+					mrgb[5]=_mm_max_epi16(mrgb[5], _mm_set1_epi16(-128));
+					mrgb[0]=_mm_min_epi16(mrgb[0], _mm_set1_epi16(127));
+					mrgb[1]=_mm_min_epi16(mrgb[1], _mm_set1_epi16(127));
+					mrgb[2]=_mm_min_epi16(mrgb[2], _mm_set1_epi16(127));
+					mrgb[3]=_mm_min_epi16(mrgb[3], _mm_set1_epi16(127));
+					mrgb[4]=_mm_min_epi16(mrgb[4], _mm_set1_epi16(127));
+					mrgb[5]=_mm_min_epi16(mrgb[5], _mm_set1_epi16(127));
+
+					msyms8[0]=_mm_or_si128(_mm_slli_epi16(mrgb[1], 8), _mm_and_si128(mrgb[0], _mm_set1_epi16(255)));
+					msyms8[1]=_mm_or_si128(_mm_slli_epi16(mrgb[3], 8), _mm_and_si128(mrgb[2], _mm_set1_epi16(255)));
+					msyms8[2]=_mm_or_si128(_mm_slli_epi16(mrgb[5], 8), _mm_and_si128(mrgb[4], _mm_set1_epi16(255)));
+					msyms8[0]=_mm_xor_si128(msyms8[0], _mm_set1_epi8(-128));
+					msyms8[1]=_mm_xor_si128(msyms8[1], _mm_set1_epi8(-128));
+					msyms8[2]=_mm_xor_si128(msyms8[2], _mm_set1_epi8(-128));
+					_mm_store_si128((__m128i*)imptr+0, msyms8[0]);//store RGB bytes
+					_mm_store_si128((__m128i*)imptr+1, msyms8[1]);
+					_mm_store_si128((__m128i*)imptr+2, msyms8[2]);
+#ifdef ENABLE_GUIDE
+					if(memcmp(imptr, g_image+(imptr-interleaved), sizeof(uint8_t[3*NCODERS])))
+					{
+						printf("Guide error\n");
+						for(int k=0;k<3*NCODERS;++k)
+						{
+							int x1=imptr[k];
+							int x2=g_image[imptr-interleaved+k];
+							printf("0x%02X %4d  !=  0x%02X %4d\n"
+								, x1, x1
+								, x2, x2
+							);
+						}
+						CRASH("");
+					}
+#endif
 				}
-				else
+				W[0]=myuv[0];
+				W[1]=myuv[1];
+				W[2]=myuv[2];
+				W[3]=myuv[3];
+				W[4]=myuv[4];
+				W[5]=myuv[5];
+				_mm_store_si128((__m128i*)rows[0]+0+(0+0*NROWS*NVAL)*NREG*NCH, myuv[0]);//store neighbors
+				_mm_store_si128((__m128i*)rows[0]+1+(0+0*NROWS*NVAL)*NREG*NCH, myuv[1]);
+				_mm_store_si128((__m128i*)rows[0]+2+(0+0*NROWS*NVAL)*NREG*NCH, myuv[2]);
+				_mm_store_si128((__m128i*)rows[0]+3+(0+0*NROWS*NVAL)*NREG*NCH, myuv[3]);
+				_mm_store_si128((__m128i*)rows[0]+4+(0+0*NROWS*NVAL)*NREG*NCH, myuv[4]);
+				_mm_store_si128((__m128i*)rows[0]+5+(0+0*NROWS*NVAL)*NREG*NCH, myuv[5]);
+				ecurr[0]=_mm_xor_si128(_mm_slli_epi16(msyms0[0], 1), _mm_srai_epi16(msyms0[0], 15));
+				ecurr[1]=_mm_xor_si128(_mm_slli_epi16(msyms0[1], 1), _mm_srai_epi16(msyms0[1], 15));
+				ecurr[2]=_mm_xor_si128(_mm_slli_epi16(msyms0[2], 1), _mm_srai_epi16(msyms0[2], 15));
+				ecurr[3]=_mm_xor_si128(_mm_slli_epi16(msyms0[3], 1), _mm_srai_epi16(msyms0[3], 15));
+				ecurr[4]=_mm_xor_si128(_mm_slli_epi16(msyms0[4], 1), _mm_srai_epi16(msyms0[4], 15));
+				ecurr[5]=_mm_xor_si128(_mm_slli_epi16(msyms0[5], 1), _mm_srai_epi16(msyms0[5], 15));
+			}
+			else//lossless
+#endif
+			{
+				if(fwd)
 				{
-					myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
-					myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
-					myuv[0*2+0]=_mm_and_si128(myuv[0*2+0], bytemask);
-					myuv[0*2+1]=_mm_and_si128(myuv[0*2+1], bytemask);
-					myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], amin);
-					myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], amin);
+					__m128i ctxblendmask=_mm_set1_epi16(255);
+					myuv[0]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+yidx)), half8);//load yuv
+					myuv[2]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+uidx)), half8);
+					myuv[4]=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr+vidx)), half8);
+					myuv[1]=_mm_srai_epi16(myuv[0], 8);
+					myuv[3]=_mm_srai_epi16(myuv[2], 8);
+					myuv[5]=_mm_srai_epi16(myuv[4], 8);
+
+					myuv[0]=_mm_slli_epi16(myuv[0], 8);
+					myuv[2]=_mm_slli_epi16(myuv[2], 8);
+					myuv[4]=_mm_slli_epi16(myuv[4], 8);
+
+					myuv[0]=_mm_srai_epi16(myuv[0], 8);
+					myuv[2]=_mm_srai_epi16(myuv[2], 8);
+					myuv[4]=_mm_srai_epi16(myuv[4], 8);
+
+					//predict Y
 					msyms[0]=_mm_sub_epi16(myuv[0*2+0], predY[0]);//sub pred
 					msyms[1]=_mm_sub_epi16(myuv[0*2+1], predY[1]);
-				}
-				ecurr[0*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
-				ecurr[0*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms8=_mm_or_si128(_mm_slli_epi16(myuv[0*2+1], 8), _mm_and_si128(myuv[0*2+0], _mm_set1_epi16(255)));
-				//msyms8=_mm_packs_epi16(myuv[0*2+0], myuv[0*2+1]);
-				msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
-				_mm_store_si128((__m128i*)(imptr+yidx), msyms8);//store Y bytes
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
 #ifdef ENABLE_GUIDE
-				if(memcmp(imptr+yidx, g_image+(imptr-interleaved)+yidx, NCODERS))
-				{
-					int k;
-					printf("original  decoded  original-decoded  XYC0 %d %d %d\n", kx, ky, yidx);
-					for(k=0;k<NCODERS;++k)
-						printf("0x%02X  0x%02X  %4d\n",
-							g_image[imptr-interleaved+yidx+k],
-							imptr[yidx+k],
-							g_image[imptr-interleaved+yidx+k]-imptr[yidx+k]
-						);
-					CRASH("guide error XYC0 %d %d %d/%d", kx, ky, yidx, NCODERS);
-				}
+						ALIGN(32) uint16_t diff[8];
+						__m128i modified, mdiff0, mdiff1;
+						__m128i yuv0=myuv[0*2+0];
+						__m128i yuv1=myuv[0*2+1];
 #endif
+						__m128i t0=_mm_srai_epi16(msyms[0], 15);
+						__m128i t1=_mm_srai_epi16(msyms[1], 15);
+						msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
+						msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
+						msyms[0]=_mm_sub_epi16(msyms[0], t0);
+						msyms[1]=_mm_sub_epi16(msyms[1], t1);
+						myuv[0*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[0*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
+						myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
+						myuv[0*2+0]=_mm_max_epi16(myuv[0*2+0], amin);
+						myuv[0*2+1]=_mm_max_epi16(myuv[0*2+1], amin);
+						myuv[0*2+0]=_mm_min_epi16(myuv[0*2+0], amax);
+						myuv[0*2+1]=_mm_min_epi16(myuv[0*2+1], amax);
+#ifdef ENABLE_GUIDE
+						modified=_mm_or_si128(_mm_slli_epi16(myuv[0*2+1], 8), _mm_and_si128(myuv[0*2+0], _mm_set1_epi16(255)));
+						//modified=_mm_packs_epi16(myuv[0*2+0], myuv[0*2+1]);
+						modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
+						_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+yidx), modified);
 
+						mdiff0=_mm_sub_epi16(yuv0, myuv[0*2+0]);
+						mdiff1=_mm_sub_epi16(yuv1, myuv[0*2+1]);
+						mdiff0=_mm_abs_epi16(mdiff0);
+						mdiff1=_mm_abs_epi16(mdiff1);
+						mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
+						mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
+						mdiff0=_mm_add_epi16(mdiff0, mdiff1);
+						_mm_store_si128((__m128i*)diff, mdiff0);
+						{
+							int k;
+							for(k=0;k<_countof(diff);++k)
+								g_sqe[0]+=diff[k];
+						}
+#endif
+					}
+#endif
+					W[0]=myuv[0*2+0];
+					W[1]=myuv[0*2+1];
+					_mm_store_si128((__m128i*)rows[0]+0+0+0*12, myuv[0*2+0]);//store Y neighbors
+					_mm_store_si128((__m128i*)rows[0]+0+1+0*12, myuv[0*2+1]);
+					ecurr[0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));//ecurr = pack_sign(yuv-pred)
+					ecurr[1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms[0]=_mm_sub_epi16(msyms[0], amin);
+					msyms[1]=_mm_sub_epi16(msyms[1], amin);
+					ctxY[0]=_mm_slli_epi16(ctxY[0], 8);
+					ctxY[1]=_mm_slli_epi16(ctxY[1], 8);
+					msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
+					msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
+					ctxY[0]=_mm_or_si128(ctxY[0], msyms[0]);
+					ctxY[1]=_mm_or_si128(ctxY[1], msyms[1]);
+					_mm_store_si128((__m128i*)syms+0*2+0, ctxY[0]);
+					_mm_store_si128((__m128i*)syms+0*2+1, ctxY[1]);
+					_mm_store_si128((__m128i*)ctxptr+0*2+0, ctxY[0]);//store Y  ctx|residuals
+					_mm_store_si128((__m128i*)ctxptr+0*2+1, ctxY[1]);
+				
+					//predict U
+					moffset[0]=_mm_and_si128(myuv[0*2+0], uhelpmask);
+					moffset[1]=_mm_and_si128(myuv[0*2+1], uhelpmask);
+					predU[0]=_mm_add_epi16(predU[0], moffset[0]);
+					predU[1]=_mm_add_epi16(predU[1], moffset[1]);
+					predU[0]=_mm_max_epi16(predU[0], amin);
+					predU[1]=_mm_max_epi16(predU[1], amin);
+					predU[0]=_mm_min_epi16(predU[0], amax);
+					predU[1]=_mm_min_epi16(predU[1], amax);
 
-				//reconstruct U
-				moffset[0]=_mm_and_si128(myuv[0*2+0], uhelpmask);
-				moffset[1]=_mm_and_si128(myuv[0*2+1], uhelpmask);
-				predU[0]=_mm_add_epi16(predU[0], moffset[0]);
-				predU[1]=_mm_add_epi16(predU[1], moffset[1]);
-				predU[0]=_mm_max_epi16(predU[0], amin);
-				predU[1]=_mm_max_epi16(predU[1], amin);
-				predU[0]=_mm_min_epi16(predU[0], amax);
-				predU[1]=_mm_min_epi16(predU[1], amax);
-				if(dist>1)
-				{
-					msyms[0]=_mm_add_epi16(myuv[1*2+0], amin);
-					msyms[1]=_mm_add_epi16(myuv[1*2+1], amin);
-					myuv[1*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[1*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
-					myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
-					myuv[1*2+0]=_mm_max_epi16(myuv[1*2+0], amin);
-					myuv[1*2+1]=_mm_max_epi16(myuv[1*2+1], amin);
-					myuv[1*2+0]=_mm_min_epi16(myuv[1*2+0], amax);
-					myuv[1*2+1]=_mm_min_epi16(myuv[1*2+1], amax);
+					msyms[0]=_mm_sub_epi16(myuv[1*2+0], predU[0]);
+					msyms[1]=_mm_sub_epi16(myuv[1*2+1], predU[1]);
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
+#ifdef ENABLE_GUIDE
+						ALIGN(32) uint16_t diff[8];
+						__m128i modified, mdiff0, mdiff1;
+						__m128i yuv0=myuv[1*2+0];
+						__m128i yuv1=myuv[1*2+1];
+#endif
+						__m128i t0=_mm_srai_epi16(msyms[0], 15);
+						__m128i t1=_mm_srai_epi16(msyms[1], 15);
+						msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
+						msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
+						msyms[0]=_mm_sub_epi16(msyms[0], t0);
+						msyms[1]=_mm_sub_epi16(msyms[1], t1);
+						myuv[1*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[1*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
+						myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
+						myuv[1*2+0]=_mm_max_epi16(myuv[1*2+0], amin);
+						myuv[1*2+1]=_mm_max_epi16(myuv[1*2+1], amin);
+						myuv[1*2+0]=_mm_min_epi16(myuv[1*2+0], amax);
+						myuv[1*2+1]=_mm_min_epi16(myuv[1*2+1], amax);
+#ifdef ENABLE_GUIDE
+						modified=_mm_or_si128(_mm_slli_epi16(myuv[1*2+1], 8), _mm_and_si128(myuv[1*2+0], _mm_set1_epi16(255)));
+						//modified=_mm_packs_epi16(myuv[1*2+0], myuv[1*2+1]);
+						modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
+						_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+uidx), modified);
+
+						mdiff0=_mm_sub_epi16(yuv0, myuv[1*2+0]);
+						mdiff1=_mm_sub_epi16(yuv1, myuv[1*2+1]);
+						mdiff0=_mm_abs_epi16(mdiff0);
+						mdiff1=_mm_abs_epi16(mdiff1);
+						mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
+						mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
+						mdiff0=_mm_add_epi16(mdiff0, mdiff1);
+						_mm_store_si128((__m128i*)diff, mdiff0);
+						{
+							int k;
+							for(k=0;k<_countof(diff);++k)
+								g_sqe[1]+=diff[k];
+						}
+#endif
+					}
+#endif
+					ecurr[1*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
+					ecurr[1*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms[0]=_mm_sub_epi16(msyms[0], amin);
+					msyms[1]=_mm_sub_epi16(msyms[1], amin);
+					ctxU[0]=_mm_add_epi16(ctxU[0], mctxuoffset);
+					ctxU[1]=_mm_add_epi16(ctxU[1], mctxuoffset);
+					ctxU[0]=_mm_slli_epi16(ctxU[0], 8);
+					ctxU[1]=_mm_slli_epi16(ctxU[1], 8);
+					msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
+					msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
+					ctxU[0]=_mm_or_si128(ctxU[0], msyms[0]);
+					ctxU[1]=_mm_or_si128(ctxU[1], msyms[1]);
+					_mm_store_si128((__m128i*)syms+1*2+0, ctxU[0]);
+					_mm_store_si128((__m128i*)syms+1*2+1, ctxU[1]);
+					_mm_store_si128((__m128i*)ctxptr+1*2+0, ctxU[0]);//store U  ctx|residuals
+					_mm_store_si128((__m128i*)ctxptr+1*2+1, ctxU[1]);
+				
+					//predict V
+					moffset[2]=_mm_mullo_epi16(vc0, myuv[0]);
+					moffset[3]=_mm_mullo_epi16(vc0, myuv[1]);
+					moffset[2]=_mm_add_epi16(moffset[2], _mm_mullo_epi16(vc1, myuv[2]));
+					moffset[3]=_mm_add_epi16(moffset[3], _mm_mullo_epi16(vc1, myuv[3]));
+					moffset[2]=_mm_srai_epi16(moffset[2], 2);
+					moffset[3]=_mm_srai_epi16(moffset[3], 2);
+					predV[0]=_mm_add_epi16(predV[0], moffset[2]);
+					predV[1]=_mm_add_epi16(predV[1], moffset[3]);
+					predV[0]=_mm_max_epi16(predV[0], amin);
+					predV[1]=_mm_max_epi16(predV[1], amin);
+					predV[0]=_mm_min_epi16(predV[0], amax);
+					predV[1]=_mm_min_epi16(predV[1], amax);
+
+					msyms[0]=_mm_sub_epi16(myuv[2*2+0], predV[0]);
+					msyms[1]=_mm_sub_epi16(myuv[2*2+1], predV[1]);
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
+#ifdef ENABLE_GUIDE
+						ALIGN(32) uint16_t diff[8];
+						__m128i modified, mdiff0, mdiff1;
+						__m128i yuv0=myuv[2*2+0];
+						__m128i yuv1=myuv[2*2+1];
+#endif
+						__m128i t0=_mm_srai_epi16(msyms[0], 15);
+						__m128i t1=_mm_srai_epi16(msyms[1], 15);
+						msyms[0]=_mm_mulhi_epi16(msyms[0], dist_rcp);
+						msyms[1]=_mm_mulhi_epi16(msyms[1], dist_rcp);
+						msyms[0]=_mm_sub_epi16(msyms[0], t0);
+						msyms[1]=_mm_sub_epi16(msyms[1], t1);
+						myuv[2*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[2*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
+						myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
+						myuv[2*2+0]=_mm_max_epi16(myuv[2*2+0], amin);
+						myuv[2*2+1]=_mm_max_epi16(myuv[2*2+1], amin);
+						myuv[2*2+0]=_mm_min_epi16(myuv[2*2+0], amax);
+						myuv[2*2+1]=_mm_min_epi16(myuv[2*2+1], amax);
+#ifdef ENABLE_GUIDE
+						modified=_mm_or_si128(_mm_slli_epi16(myuv[2*2+1], 8), _mm_and_si128(myuv[2*2+0], _mm_set1_epi16(255)));
+						//modified=_mm_packs_epi16(myuv[2*2+0], myuv[2*2+1]);
+						modified=_mm_xor_si128(modified, _mm_set1_epi8(-128));
+						_mm_storeu_si128((__m128i*)(g_image+(imptr-interleaved-isize)+vidx), modified);
+
+						mdiff0=_mm_sub_epi16(yuv0, myuv[2*2+0]);
+						mdiff1=_mm_sub_epi16(yuv1, myuv[2*2+1]);
+						mdiff0=_mm_abs_epi16(mdiff0);
+						mdiff1=_mm_abs_epi16(mdiff1);
+						mdiff0=_mm_mullo_epi16(mdiff0, mdiff0);
+						mdiff1=_mm_mullo_epi16(mdiff1, mdiff1);
+						mdiff0=_mm_add_epi16(mdiff0, mdiff1);
+						_mm_store_si128((__m128i*)diff, mdiff0);
+						{
+							int k;
+							for(k=0;k<_countof(diff);++k)
+								g_sqe[2]+=diff[k];
+						}
+#endif
+					}
+#endif
+					ecurr[2*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
+					ecurr[2*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms[0]=_mm_sub_epi16(msyms[0], amin);
+					msyms[1]=_mm_sub_epi16(msyms[1], amin);
+					ctxV[0]=_mm_add_epi16(ctxV[0], mctxvoffset);
+					ctxV[1]=_mm_add_epi16(ctxV[1], mctxvoffset);
+					ctxV[0]=_mm_slli_epi16(ctxV[0], 8);
+					ctxV[1]=_mm_slli_epi16(ctxV[1], 8);
+					msyms[0]=_mm_and_si128(msyms[0], ctxblendmask);
+					msyms[1]=_mm_and_si128(msyms[1], ctxblendmask);
+					ctxV[0]=_mm_or_si128(ctxV[0], msyms[0]);
+					ctxV[1]=_mm_or_si128(ctxV[1], msyms[1]);
+					_mm_store_si128((__m128i*)syms+2*2+0, ctxV[0]);
+					_mm_store_si128((__m128i*)syms+2*2+1, ctxV[1]);
+					_mm_store_si128((__m128i*)ctxptr+2*2+0, ctxV[0]);//store V  ctx|residuals		ctxptr+NCODERS*(C*2+R)
+					_mm_store_si128((__m128i*)ctxptr+2*2+1, ctxV[1]);
+
+					{
+						int *pa, *pb, *pc, va, vb, vc;
+
+						pa=hists+syms[0*16+0x0]; pb=hists+syms[1*16+0x0]; pc=hists+syms[2*16+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x1]; pb=hists+syms[1*16+0x1]; pc=hists+syms[2*16+0x1]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x2]; pb=hists+syms[1*16+0x2]; pc=hists+syms[2*16+0x2]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x3]; pb=hists+syms[1*16+0x3]; pc=hists+syms[2*16+0x3]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x4]; pb=hists+syms[1*16+0x4]; pc=hists+syms[2*16+0x4]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x5]; pb=hists+syms[1*16+0x5]; pc=hists+syms[2*16+0x5]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x6]; pb=hists+syms[1*16+0x6]; pc=hists+syms[2*16+0x6]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x7]; pb=hists+syms[1*16+0x7]; pc=hists+syms[2*16+0x7]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x8]; pb=hists+syms[1*16+0x8]; pc=hists+syms[2*16+0x8]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0x9]; pb=hists+syms[1*16+0x9]; pc=hists+syms[2*16+0x9]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xA]; pb=hists+syms[1*16+0xA]; pc=hists+syms[2*16+0xA]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xB]; pb=hists+syms[1*16+0xB]; pc=hists+syms[2*16+0xB]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xC]; pb=hists+syms[1*16+0xC]; pc=hists+syms[2*16+0xC]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xD]; pb=hists+syms[1*16+0xD]; pc=hists+syms[2*16+0xD]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xE]; pb=hists+syms[1*16+0xE]; pc=hists+syms[2*16+0xE]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+						pa=hists+syms[0*16+0xF]; pb=hists+syms[1*16+0xF]; pc=hists+syms[2*16+0xF]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
+					}
+#if 0
+					++hists[syms[0*16+0x0]];
+					++hists[syms[1*16+0x0]];
+					++hists[syms[2*16+0x0]];
+					++hists[syms[0*16+0x1]];
+					++hists[syms[1*16+0x1]];
+					++hists[syms[2*16+0x1]];
+					++hists[syms[0*16+0x2]];
+					++hists[syms[1*16+0x2]];
+					++hists[syms[2*16+0x2]];
+					++hists[syms[0*16+0x3]];
+					++hists[syms[1*16+0x3]];
+					++hists[syms[2*16+0x3]];
+					++hists[syms[0*16+0x4]];
+					++hists[syms[1*16+0x4]];
+					++hists[syms[2*16+0x4]];
+					++hists[syms[0*16+0x5]];
+					++hists[syms[1*16+0x5]];
+					++hists[syms[2*16+0x5]];
+					++hists[syms[0*16+0x6]];
+					++hists[syms[1*16+0x6]];
+					++hists[syms[2*16+0x6]];
+					++hists[syms[0*16+0x7]];
+					++hists[syms[1*16+0x7]];
+					++hists[syms[2*16+0x7]];
+					++hists[syms[0*16+0x8]];
+					++hists[syms[1*16+0x8]];
+					++hists[syms[2*16+0x8]];
+					++hists[syms[0*16+0x9]];
+					++hists[syms[1*16+0x9]];
+					++hists[syms[2*16+0x9]];
+					++hists[syms[0*16+0xA]];
+					++hists[syms[1*16+0xA]];
+					++hists[syms[2*16+0xA]];
+					++hists[syms[0*16+0xB]];
+					++hists[syms[1*16+0xB]];
+					++hists[syms[2*16+0xB]];
+					++hists[syms[0*16+0xC]];
+					++hists[syms[1*16+0xC]];
+					++hists[syms[2*16+0xC]];
+					++hists[syms[0*16+0xD]];
+					++hists[syms[1*16+0xD]];
+					++hists[syms[2*16+0xD]];
+					++hists[syms[0*16+0xE]];
+					++hists[syms[1*16+0xE]];
+					++hists[syms[2*16+0xE]];
+					++hists[syms[0*16+0xF]];
+					++hists[syms[1*16+0xF]];
+					++hists[syms[2*16+0xF]];
+#endif
+					ctxptr+=sizeof(int16_t[3][NCODERS]);
 				}
 				else
 				{
-					myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
-					myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
-					myuv[1*2+0]=_mm_and_si128(myuv[1*2+0], bytemask);
-					myuv[1*2+1]=_mm_and_si128(myuv[1*2+1], bytemask);
-					myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], amin);
-					myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], amin);
-					msyms[0]=_mm_sub_epi16(myuv[1*2+0], predU[0]);//sub pred
-					msyms[1]=_mm_sub_epi16(myuv[1*2+1], predU[1]);
-				}
-				ecurr[1*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
-				ecurr[1*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms8=_mm_or_si128(_mm_slli_epi16(myuv[1*2+1], 8), _mm_and_si128(myuv[1*2+0], _mm_set1_epi16(255)));
-				//msyms8=_mm_packs_epi16(myuv[1*2+0], myuv[1*2+1]);
-				msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
-				_mm_store_si128((__m128i*)(imptr+uidx), msyms8);//store U bytes
+					//decode main
+					__m128i msyms8;
+				
+					//reconstruct Y
+					dec_yuv(mstate, ctxY, CDF2syms+((ptrdiff_t)NCTX*0<<PROBBITS), &streamptr, streamend, myuv+0*2);//residuals from [0 ~ 255]
+					dec_yuv(mstate, ctxU, CDF2syms+((ptrdiff_t)NCTX*1<<PROBBITS), &streamptr, streamend, myuv+1*2);
+					dec_yuv(mstate, ctxV, CDF2syms+((ptrdiff_t)NCTX*2<<PROBBITS), &streamptr, streamend, myuv+2*2);
+
+					//yuv = (char)(sym+pred-128)	= (uint8_t)(sym+pred)-128
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
+						msyms[0]=_mm_add_epi16(myuv[0*2+0], amin);
+						msyms[1]=_mm_add_epi16(myuv[0*2+1], amin);
+						myuv[0*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[0*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
+						myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
+						myuv[0*2+0]=_mm_max_epi16(myuv[0*2+0], amin);
+						myuv[0*2+1]=_mm_max_epi16(myuv[0*2+1], amin);
+						myuv[0*2+0]=_mm_min_epi16(myuv[0*2+0], amax);
+						myuv[0*2+1]=_mm_min_epi16(myuv[0*2+1], amax);
+					}
+					else
+#endif
+					{
+						myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], predY[0]);
+						myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], predY[1]);
+						myuv[0*2+0]=_mm_and_si128(myuv[0*2+0], bytemask);
+						myuv[0*2+1]=_mm_and_si128(myuv[0*2+1], bytemask);
+						myuv[0*2+0]=_mm_add_epi16(myuv[0*2+0], amin);
+						myuv[0*2+1]=_mm_add_epi16(myuv[0*2+1], amin);
+						msyms[0]=_mm_sub_epi16(myuv[0*2+0], predY[0]);//sub pred
+						msyms[1]=_mm_sub_epi16(myuv[0*2+1], predY[1]);
+					}
+					ecurr[0*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
+					ecurr[0*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms8=_mm_or_si128(_mm_slli_epi16(myuv[0*2+1], 8), _mm_and_si128(myuv[0*2+0], _mm_set1_epi16(255)));
+					msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
+					_mm_store_si128((__m128i*)(imptr+yidx), msyms8);//store Y bytes
 #ifdef ENABLE_GUIDE
-				if(memcmp(imptr+uidx, g_image+(imptr-interleaved)+uidx, NCODERS))
-				{
-					int k;
-					printf("original  decoded  original-decoded  XYC1 %d %d %d\n", kx, ky, uidx);
-					for(k=0;k<NCODERS;++k)
-						printf("0x%02X  0x%02X  %4d\n",
-							g_image[imptr-interleaved+uidx+k],
-							imptr[uidx+k],
-							g_image[imptr-interleaved+uidx+k]-imptr[uidx+k]
-						);
-					CRASH("guide error XYC1 %d %d %d/%d", kx, ky, uidx, NCODERS);
-				}
+					if(memcmp(imptr+yidx, g_image+(imptr-interleaved)+yidx, NCODERS))
+					{
+						int k;
+						printf("original  decoded  original-decoded  XYC0 %d %d %d\n", kx, ky, yidx);
+						for(k=0;k<NCODERS;++k)
+							printf("0x%02X  0x%02X  %4d\n",
+								g_image[imptr-interleaved+yidx+k],
+								imptr[yidx+k],
+								g_image[imptr-interleaved+yidx+k]-imptr[yidx+k]
+							);
+						CRASH("guide error XYC0 %d %d %d/%d", kx, ky, yidx, NCODERS);
+					}
+#endif
+
+
+					//reconstruct U
+					moffset[0]=_mm_and_si128(myuv[0*2+0], uhelpmask);
+					moffset[1]=_mm_and_si128(myuv[0*2+1], uhelpmask);
+					predU[0]=_mm_add_epi16(predU[0], moffset[0]);
+					predU[1]=_mm_add_epi16(predU[1], moffset[1]);
+					predU[0]=_mm_max_epi16(predU[0], amin);
+					predU[1]=_mm_max_epi16(predU[1], amin);
+					predU[0]=_mm_min_epi16(predU[0], amax);
+					predU[1]=_mm_min_epi16(predU[1], amax);
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
+						msyms[0]=_mm_add_epi16(myuv[1*2+0], amin);
+						msyms[1]=_mm_add_epi16(myuv[1*2+1], amin);
+						myuv[1*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[1*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
+						myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
+						myuv[1*2+0]=_mm_max_epi16(myuv[1*2+0], amin);
+						myuv[1*2+1]=_mm_max_epi16(myuv[1*2+1], amin);
+						myuv[1*2+0]=_mm_min_epi16(myuv[1*2+0], amax);
+						myuv[1*2+1]=_mm_min_epi16(myuv[1*2+1], amax);
+					}
+					else
+#endif
+					{
+						myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], predU[0]);
+						myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], predU[1]);
+						myuv[1*2+0]=_mm_and_si128(myuv[1*2+0], bytemask);
+						myuv[1*2+1]=_mm_and_si128(myuv[1*2+1], bytemask);
+						myuv[1*2+0]=_mm_add_epi16(myuv[1*2+0], amin);
+						myuv[1*2+1]=_mm_add_epi16(myuv[1*2+1], amin);
+						msyms[0]=_mm_sub_epi16(myuv[1*2+0], predU[0]);//sub pred
+						msyms[1]=_mm_sub_epi16(myuv[1*2+1], predU[1]);
+					}
+					ecurr[1*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
+					ecurr[1*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms8=_mm_or_si128(_mm_slli_epi16(myuv[1*2+1], 8), _mm_and_si128(myuv[1*2+0], _mm_set1_epi16(255)));
+					msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
+					_mm_store_si128((__m128i*)(imptr+uidx), msyms8);//store U bytes
+#ifdef ENABLE_GUIDE
+					if(memcmp(imptr+uidx, g_image+(imptr-interleaved)+uidx, NCODERS))
+					{
+						int k;
+						printf("original  decoded  original-decoded  XYC1 %d %d %d\n", kx, ky, uidx);
+						for(k=0;k<NCODERS;++k)
+							printf("0x%02X  0x%02X  %4d\n",
+								g_image[imptr-interleaved+uidx+k],
+								imptr[uidx+k],
+								g_image[imptr-interleaved+uidx+k]-imptr[uidx+k]
+							);
+						CRASH("guide error XYC1 %d %d %d/%d", kx, ky, uidx, NCODERS);
+					}
 #endif
 				
 
-				//reconstruct V
-				moffset[2]=_mm_mullo_epi16(vc0, myuv[0*2+0]);
-				moffset[3]=_mm_mullo_epi16(vc0, myuv[0*2+1]);
-				moffset[2]=_mm_add_epi16(moffset[2], _mm_mullo_epi16(vc1, myuv[1*2+0]));
-				moffset[3]=_mm_add_epi16(moffset[3], _mm_mullo_epi16(vc1, myuv[1*2+1]));
-				moffset[2]=_mm_srai_epi16(moffset[2], 2);
-				moffset[3]=_mm_srai_epi16(moffset[3], 2);
-				predV[0]=_mm_add_epi16(predV[0], moffset[2]);
-				predV[1]=_mm_add_epi16(predV[1], moffset[3]);
-				predV[0]=_mm_max_epi16(predV[0], amin);
-				predV[1]=_mm_max_epi16(predV[1], amin);
-				predV[0]=_mm_min_epi16(predV[0], amax);
-				predV[1]=_mm_min_epi16(predV[1], amax);
-				if(dist>1)
-				{
-					msyms[0]=_mm_add_epi16(myuv[2*2+0], amin);
-					msyms[1]=_mm_add_epi16(myuv[2*2+1], amin);
-					myuv[2*2+0]=_mm_mullo_epi16(msyms[0], mdist);
-					myuv[2*2+1]=_mm_mullo_epi16(msyms[1], mdist);
-					myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
-					myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
-					myuv[2*2+0]=_mm_max_epi16(myuv[2*2+0], amin);
-					myuv[2*2+1]=_mm_max_epi16(myuv[2*2+1], amin);
-					myuv[2*2+0]=_mm_min_epi16(myuv[2*2+0], amax);
-					myuv[2*2+1]=_mm_min_epi16(myuv[2*2+1], amax);
-				}
-				else
-				{
-					myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
-					myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
-					myuv[2*2+0]=_mm_and_si128(myuv[2*2+0], bytemask);
-					myuv[2*2+1]=_mm_and_si128(myuv[2*2+1], bytemask);
-					myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], amin);
-					myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], amin);
-					msyms[0]=_mm_sub_epi16(myuv[2*2+0], predV[0]);//sub pred
-					msyms[1]=_mm_sub_epi16(myuv[2*2+1], predV[1]);
-				}
-				ecurr[2*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
-				ecurr[2*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
-				msyms8=_mm_or_si128(_mm_slli_epi16(myuv[2*2+1], 8), _mm_and_si128(myuv[2*2+0], _mm_set1_epi16(255)));
-				//msyms8=_mm_packs_epi16(myuv[2*2+0], myuv[2*2+1]);
-				msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
-				_mm_store_si128((__m128i*)(imptr+vidx), msyms8);//store V bytes
-#ifdef ENABLE_GUIDE
-				if(memcmp(imptr+vidx, g_image+(imptr-interleaved)+vidx, NCODERS))
-				{
-					int k;
-					printf("original  decoded  original-decoded  XYC2 %d %d %d\n", kx, ky, vidx);
-					for(k=0;k<NCODERS;++k)
-						printf("0x%02X  0x%02X  %4d\n",
-							g_image[imptr-interleaved+vidx+k],
-							imptr[vidx+k],
-							g_image[imptr-interleaved+vidx+k]-imptr[vidx+k]
-						);
-					CRASH("guide error XYC2 %d %d %d/%d", kx, ky, vidx, NCODERS);
-				}
+					//reconstruct V
+					moffset[2]=_mm_mullo_epi16(vc0, myuv[0*2+0]);
+					moffset[3]=_mm_mullo_epi16(vc0, myuv[0*2+1]);
+					moffset[2]=_mm_add_epi16(moffset[2], _mm_mullo_epi16(vc1, myuv[1*2+0]));
+					moffset[3]=_mm_add_epi16(moffset[3], _mm_mullo_epi16(vc1, myuv[1*2+1]));
+					moffset[2]=_mm_srai_epi16(moffset[2], 2);
+					moffset[3]=_mm_srai_epi16(moffset[3], 2);
+					predV[0]=_mm_add_epi16(predV[0], moffset[2]);
+					predV[1]=_mm_add_epi16(predV[1], moffset[3]);
+					predV[0]=_mm_max_epi16(predV[0], amin);
+					predV[1]=_mm_max_epi16(predV[1], amin);
+					predV[0]=_mm_min_epi16(predV[0], amax);
+					predV[1]=_mm_min_epi16(predV[1], amax);
+#ifndef USE_YCBCR
+					if(dist>1)
+					{
+						msyms[0]=_mm_add_epi16(myuv[2*2+0], amin);
+						msyms[1]=_mm_add_epi16(myuv[2*2+1], amin);
+						myuv[2*2+0]=_mm_mullo_epi16(msyms[0], mdist);
+						myuv[2*2+1]=_mm_mullo_epi16(msyms[1], mdist);
+						myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
+						myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
+						myuv[2*2+0]=_mm_max_epi16(myuv[2*2+0], amin);
+						myuv[2*2+1]=_mm_max_epi16(myuv[2*2+1], amin);
+						myuv[2*2+0]=_mm_min_epi16(myuv[2*2+0], amax);
+						myuv[2*2+1]=_mm_min_epi16(myuv[2*2+1], amax);
+					}
+					else
 #endif
+					{
+						myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], predV[0]);
+						myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], predV[1]);
+						myuv[2*2+0]=_mm_and_si128(myuv[2*2+0], bytemask);
+						myuv[2*2+1]=_mm_and_si128(myuv[2*2+1], bytemask);
+						myuv[2*2+0]=_mm_add_epi16(myuv[2*2+0], amin);
+						myuv[2*2+1]=_mm_add_epi16(myuv[2*2+1], amin);
+						msyms[0]=_mm_sub_epi16(myuv[2*2+0], predV[0]);//sub pred
+						msyms[1]=_mm_sub_epi16(myuv[2*2+1], predV[1]);
+					}
+					ecurr[2*2+0]=_mm_xor_si128(_mm_slli_epi16(msyms[0], 1), _mm_srai_epi16(msyms[0], 15));
+					ecurr[2*2+1]=_mm_xor_si128(_mm_slli_epi16(msyms[1], 1), _mm_srai_epi16(msyms[1], 15));
+					msyms8=_mm_or_si128(_mm_slli_epi16(myuv[2*2+1], 8), _mm_and_si128(myuv[2*2+0], _mm_set1_epi16(255)));
+					msyms8=_mm_xor_si128(msyms8, _mm_set1_epi8(-128));
+					_mm_store_si128((__m128i*)(imptr+vidx), msyms8);//store V bytes
+#ifdef ENABLE_GUIDE
+					if(memcmp(imptr+vidx, g_image+(imptr-interleaved)+vidx, NCODERS))
+					{
+						int k;
+						printf("original  decoded  original-decoded  XYC2 %d %d %d\n", kx, ky, vidx);
+						for(k=0;k<NCODERS;++k)
+							printf("0x%02X  0x%02X  %4d\n",
+								g_image[imptr-interleaved+vidx+k],
+								imptr[vidx+k],
+								g_image[imptr-interleaved+vidx+k]-imptr[vidx+k]
+							);
+						CRASH("guide error XYC2 %d %d %d/%d", kx, ky, vidx, NCODERS);
+					}
+#endif
+				}
+				W[0]=myuv[0];
+				W[1]=myuv[1];
+				W[2]=_mm_sub_epi16(myuv[2], moffset[0]);
+				W[3]=_mm_sub_epi16(myuv[3], moffset[1]);
+				W[4]=_mm_sub_epi16(myuv[4], moffset[2]);
+				W[5]=_mm_sub_epi16(myuv[5], moffset[3]);
+				_mm_store_si128((__m128i*)rows[0]+0+(0+0*NROWS*NVAL)*NREG*NCH, W[0]);//store neighbors
+				_mm_store_si128((__m128i*)rows[0]+1+(0+0*NROWS*NVAL)*NREG*NCH, W[1]);
+				_mm_store_si128((__m128i*)rows[0]+2+(0+0*NROWS*NVAL)*NREG*NCH, W[2]);
+				_mm_store_si128((__m128i*)rows[0]+3+(0+0*NROWS*NVAL)*NREG*NCH, W[3]);
+				_mm_store_si128((__m128i*)rows[0]+4+(0+0*NROWS*NVAL)*NREG*NCH, W[4]);
+				_mm_store_si128((__m128i*)rows[0]+5+(0+0*NROWS*NVAL)*NREG*NCH, W[5]);
 			}
-			W[0]=myuv[0];
-			W[1]=myuv[1];
-			W[2]=_mm_sub_epi16(myuv[2], moffset[0]);
-			W[3]=_mm_sub_epi16(myuv[3], moffset[1]);
-			W[4]=_mm_sub_epi16(myuv[4], moffset[2]);
-			W[5]=_mm_sub_epi16(myuv[5], moffset[3]);
-			_mm_store_si128((__m128i*)rows[0]+0+(0+0*NROWS*NVAL)*NREG*NCH, W[0]);//store neighbors
-			_mm_store_si128((__m128i*)rows[0]+1+(0+0*NROWS*NVAL)*NREG*NCH, W[1]);
-			_mm_store_si128((__m128i*)rows[0]+2+(0+0*NROWS*NVAL)*NREG*NCH, W[2]);
-			_mm_store_si128((__m128i*)rows[0]+3+(0+0*NROWS*NVAL)*NREG*NCH, W[3]);
-			_mm_store_si128((__m128i*)rows[0]+4+(0+0*NROWS*NVAL)*NREG*NCH, W[4]);
-			_mm_store_si128((__m128i*)rows[0]+5+(0+0*NROWS*NVAL)*NREG*NCH, W[5]);
 
 			//update
 			if(effort>=1)
@@ -3214,17 +3629,12 @@ int codec_l1_ssse3(int argc, char **argv)
 						mstate[1]=_mm_or_si128(mstate[1], state1);
 						mstate[2]=_mm_or_si128(mstate[2], state2);
 						mstate[3]=_mm_or_si128(mstate[3], state3);
-						//mstate[0]=_mm_blendv_epi8(mstate[0], state0, cond0);
-						//mstate[1]=_mm_blendv_epi8(mstate[1], state1, cond1);
-						//mstate[2]=_mm_blendv_epi8(mstate[2], state2, cond2);
-						//mstate[3]=_mm_blendv_epi8(mstate[3], state3, cond3);
 					}
 				}
 #ifdef ANS_VAL
 				ansval_push(mstate, sizeof(int), NCODERS);
 #endif
 				//enc update		state += (state*invf>>32>>sh)*negf+cdf		state = state/freq<<12|(cdf+state%freq)
-#if 1
 				{
 					//state += ((state*invf>>32)*(1<<(11-sh))>>11)*negf+cdf
 					__m128i lo0=_mm_mul_epu32(mstate[0], minvf[0]);//q = mulhi32(state, invf)
@@ -3267,11 +3677,6 @@ int codec_l1_ssse3(int argc, char **argv)
 					hi1=_mm_srli_epi64(hi1, PROBBITS-1);
 					hi2=_mm_srli_epi64(hi2, PROBBITS-1);
 					hi3=_mm_srli_epi64(hi3, PROBBITS-1);
-
-					//minvf[0]=_mm_blend_epi16(lo0, hi0, 0xCC);
-					//minvf[1]=_mm_blend_epi16(lo1, hi1, 0xCC);
-					//minvf[2]=_mm_blend_epi16(lo2, hi2, 0xCC);
-					//minvf[3]=_mm_blend_epi16(lo3, hi3, 0xCC);
 					{
 						__m128i lomask=_mm_set1_epi32(0xFFFF);
 						__m128i negf0=_mm_and_si128(mnegf_sh[0], lomask);
@@ -3286,10 +3691,6 @@ int codec_l1_ssse3(int argc, char **argv)
 						hi1=_mm_mul_epu32(hi1, _mm_srli_epi64(negf1, 32));
 						hi2=_mm_mul_epu32(hi2, _mm_srli_epi64(negf2, 32));
 						hi3=_mm_mul_epu32(hi3, _mm_srli_epi64(negf3, 32));
-						//minvf[0]=_mm_mullo_epi32(minvf[0], negf0);
-						//minvf[1]=_mm_mullo_epi32(minvf[1], negf1);
-						//minvf[2]=_mm_mullo_epi32(minvf[2], negf2);
-						//minvf[3]=_mm_mullo_epi32(minvf[3], negf3);
 					}
 					hi0=_mm_slli_epi64(hi0, 32);
 					hi1=_mm_slli_epi64(hi1, 32);
@@ -3335,96 +3736,6 @@ int codec_l1_ssse3(int argc, char **argv)
 					//mmax[2]=_mm_packus_epi32(mmax[2], mmax[3]);
 					//mmax[1]=mmax[2];
 					ansval_push(mmax, sizeof(int16_t), NCODERS);
-				}
-#endif
-#else
-				{
-					__m128i lo0=_mm_mul_epu32(mstate[0], minvf[0]);//q = mulhi32(state, invf)
-					__m128i lo1=_mm_mul_epu32(mstate[1], minvf[1]);
-					__m128i lo2=_mm_mul_epu32(mstate[2], minvf[2]);
-					__m128i lo3=_mm_mul_epu32(mstate[3], minvf[3]);
-					__m128i hi0=_mm_mul_epu32(_mm_srli_epi64(mstate[0], 32), _mm_srli_epi64(minvf[0], 32));
-					__m128i hi1=_mm_mul_epu32(_mm_srli_epi64(mstate[1], 32), _mm_srli_epi64(minvf[1], 32));
-					__m128i hi2=_mm_mul_epu32(_mm_srli_epi64(mstate[2], 32), _mm_srli_epi64(minvf[2], 32));
-					__m128i hi3=_mm_mul_epu32(_mm_srli_epi64(mstate[3], 32), _mm_srli_epi64(minvf[3], 32));
-					minvf[0]=_mm_blend_epi16(_mm_srli_epi64(lo0, 32), hi0, 0xCC);
-					minvf[1]=_mm_blend_epi16(_mm_srli_epi64(lo1, 32), hi1, 0xCC);
-					minvf[2]=_mm_blend_epi16(_mm_srli_epi64(lo2, 32), hi2, 0xCC);
-					minvf[3]=_mm_blend_epi16(_mm_srli_epi64(lo3, 32), hi3, 0xCC);
-				}
-				{
-#if 1
-					ALIGN(16) volatile int16_t sh[32];
-					ALIGN(16) volatile uint32_t states[16];
-
-					_mm_store_si128((__m128i*)sh+0, mnegf_sh[0]);
-					_mm_store_si128((__m128i*)sh+1, mnegf_sh[1]);
-					_mm_store_si128((__m128i*)sh+2, mnegf_sh[2]);
-					_mm_store_si128((__m128i*)sh+3, mnegf_sh[3]);
-					_mm_store_si128((__m128i*)states+0, minvf[0]);
-					_mm_store_si128((__m128i*)states+1, minvf[1]);
-					_mm_store_si128((__m128i*)states+2, minvf[2]);
-					_mm_store_si128((__m128i*)states+3, minvf[3]);
-					states[0x0]>>=sh[0x0*2+1];
-					states[0x1]>>=sh[0x1*2+1];
-					states[0x2]>>=sh[0x2*2+1];
-					states[0x3]>>=sh[0x3*2+1];
-					states[0x4]>>=sh[0x4*2+1];
-					states[0x5]>>=sh[0x5*2+1];
-					states[0x6]>>=sh[0x6*2+1];
-					states[0x7]>>=sh[0x7*2+1];
-					states[0x8]>>=sh[0x8*2+1];
-					states[0x9]>>=sh[0x9*2+1];
-					states[0xA]>>=sh[0xA*2+1];
-					states[0xB]>>=sh[0xB*2+1];
-					states[0xC]>>=sh[0xC*2+1];
-					states[0xD]>>=sh[0xD*2+1];
-					states[0xE]>>=sh[0xE*2+1];
-					states[0xF]>>=sh[0xF*2+1];
-					minvf[0]=_mm_load_si128((__m128i*)states+0);
-					minvf[1]=_mm_load_si128((__m128i*)states+1);
-					minvf[2]=_mm_load_si128((__m128i*)states+2);
-					minvf[3]=_mm_load_si128((__m128i*)states+3);
-#else
-					__m128i sh0=_mm_srli_epi32(mnegf_sh[0], 16);
-					__m128i sh1=_mm_srli_epi32(mnegf_sh[1], 16);
-					__m128i sh2=_mm_srli_epi32(mnegf_sh[2], 16);
-					__m128i sh3=_mm_srli_epi32(mnegf_sh[3], 16);
-					minvf[0]=_mm_srlv_epi32(minvf[0], sh0);
-					minvf[1]=_mm_srlv_epi32(minvf[1], sh1);
-					minvf[2]=_mm_srlv_epi32(minvf[2], sh2);
-					minvf[3]=_mm_srlv_epi32(minvf[3], sh3);
-#endif
-				}
-				mstate[0]=_mm_add_epi32(mstate[0], mcdf[0]);
-				mstate[1]=_mm_add_epi32(mstate[1], mcdf[1]);
-				mstate[2]=_mm_add_epi32(mstate[2], mcdf[2]);
-				mstate[3]=_mm_add_epi32(mstate[3], mcdf[3]);
-				{
-					__m128i lomask=_mm_set1_epi32(0xFFFF);
-					__m128i negf0=_mm_and_si128(mnegf_sh[0], lomask);
-					__m128i negf1=_mm_and_si128(mnegf_sh[1], lomask);
-					__m128i negf2=_mm_and_si128(mnegf_sh[2], lomask);
-					__m128i negf3=_mm_and_si128(mnegf_sh[3], lomask);
-					minvf[0]=_mm_mullo_epi32(minvf[0], negf0);
-					minvf[1]=_mm_mullo_epi32(minvf[1], negf1);
-					minvf[2]=_mm_mullo_epi32(minvf[2], negf2);
-					minvf[3]=_mm_mullo_epi32(minvf[3], negf3);
-#ifdef ANS_VAL
-					__m128i mM=_mm_set1_epi32(1<<PROBBITS);
-					negf0=_mm_sub_epi16(mM, negf0);
-					negf1=_mm_sub_epi16(mM, negf1);
-					negf2=_mm_sub_epi16(mM, negf2);
-					negf3=_mm_sub_epi16(mM, negf3);
-					negf0=_mm_packus_epi32(negf0, negf1);
-					negf2=_mm_packus_epi32(negf2, negf3);
-					{
-						ALIGN(32) uint16_t freqs[NCODERS];
-						_mm_store_si128((__m128i*)freqs+0, negf0);
-						_mm_store_si128((__m128i*)freqs+1, negf2);
-						ansval_push(freqs, sizeof(int16_t), NCODERS);
-					}
-#endif
 				}
 #endif
 				mstate[0]=_mm_add_epi32(mstate[0], minvf[0]);
@@ -3515,7 +3826,7 @@ int codec_l1_ssse3(int argc, char **argv)
 				struct stat info={0};
 				stat(srcfn, &info);
 				usize2=info.st_size;
-				printf("WH %d*%d  RCT %2d %s  effort %d  dist %d  \"%s\"\n"
+				printf("L1C SSSE3 WH %d*%d  RCT %2d %s  effort %d  dist %3d  \"%s\"\n"
 					, iw
 					, ih
 					, bestrct

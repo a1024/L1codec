@@ -869,7 +869,7 @@ int codec_l1_sse41(int argc, char **argv)
 	effort&=3;
 	dist=argc<5?1:atoi(argv[4]);
 	if(dist>1)
-		CLAMP2(dist, 4, 31);
+		CLAMP2(dist, 3, 31);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");
@@ -1425,7 +1425,7 @@ int codec_l1_sse41(int argc, char **argv)
 					/*
 					effort 1
 					0	N+W-NW
-					1	N
+					1	2*N-NN
 					2	W
 					3	NE
 					*/
@@ -1438,13 +1438,13 @@ int codec_l1_sse41(int argc, char **argv)
 					L1preds[0*6+4]=predV[0];
 					L1preds[0*6+5]=predV[1];
 
-					//N
-					L1preds[1*6+0]=N[0];
-					L1preds[1*6+1]=N[1];
-					L1preds[1*6+2]=N[2];
-					L1preds[1*6+3]=N[3];
-					L1preds[1*6+4]=N[4];
-					L1preds[1*6+5]=N[5];
+					//2*N-NN
+					L1preds[1*6+0]=_mm_sub_epi16(_mm_add_epi16(N[0], N[0]), _mm_load_si128((__m128i*)rows[2]+0+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+1]=_mm_sub_epi16(_mm_add_epi16(N[1], N[1]), _mm_load_si128((__m128i*)rows[2]+1+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+2]=_mm_sub_epi16(_mm_add_epi16(N[2], N[2]), _mm_load_si128((__m128i*)rows[2]+2+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+3]=_mm_sub_epi16(_mm_add_epi16(N[3], N[3]), _mm_load_si128((__m128i*)rows[2]+3+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+4]=_mm_sub_epi16(_mm_add_epi16(N[4], N[4]), _mm_load_si128((__m128i*)rows[2]+4+(0+0*NCH)*NROWS*NVAL));
+					L1preds[1*6+5]=_mm_sub_epi16(_mm_add_epi16(N[5], N[5]), _mm_load_si128((__m128i*)rows[2]+5+(0+0*NCH)*NROWS*NVAL));
 
 					//W
 					L1preds[2*6+0]=W[0];
@@ -3430,7 +3430,7 @@ int codec_l1_sse41(int argc, char **argv)
 				struct stat info={0};
 				stat(srcfn, &info);
 				usize2=info.st_size;
-				printf("WH %d*%d  RCT %2d %s  effort %d  dist %d  \"%s\"\n"
+				printf("L1C SSE41 WH %d*%d  RCT %2d %s  effort %d  dist %3d  \"%s\"\n"
 					, iw
 					, ih
 					, bestrct

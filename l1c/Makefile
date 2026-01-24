@@ -27,6 +27,10 @@ x86:	l1c-ssse3-x86  l1c-sse41-x86
 l1c-avx2:	l1c-avx2.c
 	$(CC) $(CFLAGS) -mavx2 -mlzcnt -Dcodec_l1_avx2=main l1c-avx2.c -o l1c-avx2 $(LIBS)
 
+#l1c-avx2-prof:	l1c-avx2.c
+#	clang -Wall -O2 -g -fprofile-instr-generate -fcoverage-mapping -mavx2 -mlzcnt -Dcodec_l1_avx2=main l1c-avx2.c -o l1c-avx2-prof $(LIBS)
+
+
 l1c-sse41:	l1c-sse41.c
 	$(CC) $(CFLAGS) -msse4.1 -Dcodec_l1_sse41=main l1c-sse41.c -o l1c-sse41 $(LIBS)
 
