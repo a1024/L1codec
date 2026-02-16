@@ -20,7 +20,7 @@
 
 	#define PROFILE_TIME		//should be on
 
-#ifdef _DEBUG
+#ifdef _MSC_VER
 	#define PROFILE_SIZE
 	#define LOUD			//size & time
 
@@ -1088,7 +1088,7 @@ int codec_l1_ssse3(int argc, char **argv)
 			{
 				__m128i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(kx=0;kx<blockw;kx+=ANALYSIS_XSTRIDE)
+				for(kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m128i rg0, gb0, br0;
 					__m128i rg1, gb1, br1;
@@ -1223,13 +1223,14 @@ int codec_l1_ssse3(int argc, char **argv)
 						+counters[rct[2]]
 					;
 #ifdef LOUD
-					printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n",
-						rct_names[kt],
-						counters[rct[0]],
-						counters[rct[1]],
-						counters[rct[2]],
-						currerr,
-						!kt||minerr>currerr?" <-":""
+					printf("%2d  %-14s %12lld + %12lld + %12lld = %12lld%s\n"
+						, kt
+						, rct_names[kt]
+						, counters[rct[0]]
+						, counters[rct[1]]
+						, counters[rct[2]]
+						, currerr
+						, !kt||minerr>currerr?" <-":""
 					);
 #endif
 					if(!kt||minerr>currerr)

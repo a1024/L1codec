@@ -824,7 +824,7 @@ int codec_l1_avx512(int argc, char **argv)
 			{
 				__m512i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<blockw;kx+=ANALYSIS_XSTRIDE)
+				for(int kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m512i r0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+0), half8));
 					__m512i r1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+1), half8));
@@ -938,13 +938,13 @@ int codec_l1_avx512(int argc, char **argv)
 					+counters[rct[2]]
 				;
 #ifdef LOUD
-				printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n",
-					rct_names[kt],
-					counters[rct[0]],
-					counters[rct[1]],
-					counters[rct[2]],
-					currerr,
-					!kt||minerr>currerr?" <-":""
+				printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n"
+					, rct_names[kt]
+					, counters[rct[0]]
+					, counters[rct[1]]
+					, counters[rct[2]]
+					, currerr
+					, !kt||minerr>currerr?" <-":""
 				);
 #endif
 				if(!kt||minerr>currerr)

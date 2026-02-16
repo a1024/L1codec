@@ -19,8 +19,8 @@ int codec_l1_avx512(int argc, char **argv);
 
 //	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
-//	#define CODEC codec_l1_avx2
-	#define CODEC codec_l1_avx512
+	#define CODEC codec_l1_avx2
+//	#define CODEC codec_l1_avx512
 
 
 #ifdef ENABLE_GUIDE
@@ -34,20 +34,18 @@ int ansvalidx=0, ansvalmax=0;
 int main(int argc, char **argv)
 {
 	const char *dstfn=//OVERWRITTEN
-	//	"C:/dataset-a-temp/zzz.ppm"
+		"C:/dataset-a-temp/zzz.ppm"
+	//	"C:/Projects/datasets/zzz.ppm"
 	//	"D:/ML/zzz.ppm"
-		"C:/Projects/datasets/zzz.ppm"
 	//	"F:/Projects/zzz.ppm"
 	;
 	const char *tmpfn=//OVERWRITTEN
-	//	"C:/dataset-a-temp/zzz.l1c"
+		"C:/dataset-a-temp/zzz.l1c"
+	//	"C:/Projects/datasets/zzz.l1c"
 	//	"D:/ML/zzz.l1c"
-		"C:/Projects/datasets/zzz.l1c"
 	//	"F:/Projects/zzz.l1c"
 	;
 	const char *srcfn=
-	//	"F:/Projects/dataset-GDCC2020-ppm/photo-01.ppm"
-
 	//	"C:/dataset-a70-ppm/20240816_113656_966.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_abigail-keenan-27293.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_alberto-restifo-4549.ppm"
@@ -92,8 +90,9 @@ int main(int argc, char **argv)
 	//	"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/kodak.PPM"
 	//	"C:/dataset-HUGE-ppm/space_huge.ppm"
-	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+		"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_02.ppm"
+	//	"C:/dataset-LPCB-ppm/fujifilm_finepix_x100_01.ppm"
 	//	"C:/dataset-LPCB-ppm/PIA13757.ppm"
 	//	"C:/dataset-LPCB-ppm/PIA13803.ppm"
 	//	"C:/dataset-LPCB-ppm/PIA13833.ppm"
@@ -140,16 +139,17 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-06.ppm"
 	//	"C:/Projects/datasets/dataset-kodak-ppm/kodim23.ppm"
-		"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+	//	"C:/Projects/datasets/dataset-LPCB-ppm/fujifilm_finepix_x100_01.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/PIA12811.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/PIA13882.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/STA13843.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/STA13843.ppm"	//large
 	//	"C:/Projects/datasets/kodim13.ppm"
 	//	"C:/Projects/datasets/kodim13.ppm"
-	//	"C:/Projects/datasets/kodim13-small16.ppm"
 	//	"C:/Projects/datasets/kodim13-small16.PPM"
+	//	"C:/Projects/datasets/kodim13-small16.ppm"
 	//	"C:/Projects/datasets/kodim13-small4.PPM"
 	//	"C:/Projects/datasets/kodim24.ppm"
 	//	"C:/Projects/datasets/space_huge.ppm"
@@ -167,6 +167,7 @@ int main(int argc, char **argv)
 	//	"D:/ML/nice_clock_face.ppm"
 	//	"D:/ML/zzz_halfbright.PPM"
 	//	"D:/Programs/c29/song.ppm"
+	//	"F:/Projects/dataset-GDCC2020-ppm/photo-01.ppm"
 	;
 	const char *encargs[]=
 	{
