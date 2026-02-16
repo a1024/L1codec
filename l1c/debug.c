@@ -17,9 +17,9 @@ int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
-//	#define CODEC codec_l1_ssse3
+	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
-	#define CODEC codec_l1_avx2
+//	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
 
 
@@ -54,7 +54,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-CLIC303-ppm/2048x1320_zugr-108.ppm"
 	//	"C:/dataset-CLIC303-ppm/2048x1320_zugr-108.ppm"
 	//	"C:/dataset-DIV2K-ppm"
-	//	"C:/dataset-DIV2K-ppm/0801.ppm"
+		"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/dataset-DIV2K-ppm/0805.ppm"
@@ -90,7 +90,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/kodak.PPM"
 	//	"C:/dataset-HUGE-ppm/space_huge.ppm"
-		"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_02.ppm"
 	//	"C:/dataset-LPCB-ppm/fujifilm_finepix_x100_01.ppm"
 	//	"C:/dataset-LPCB-ppm/PIA13757.ppm"

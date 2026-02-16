@@ -7,8 +7,9 @@
 #	include<stddef.h>//ptrdiff_t
 #endif
 #include<stdint.h>
+//#define _USE_MATH_DEFINES
 #include<math.h>
-#include<emmintrin.h>
+#include<smmintrin.h>//SSE4.1
 #ifdef _MSC_VER
 #include<intrin.h>
 #else
@@ -29,7 +30,7 @@
 //	#define TEST_INTERLEAVE
 #endif
 
-//	#define ANALYSIS_GRAD
+	#define ANALYSIS_GRAD
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave
 
@@ -39,8 +40,8 @@ enum
 	YCODERS=4,
 	NCODERS=XCODERS*YCODERS,
 
-	ANALYSIS_XSTRIDE=2,
-	ANALYSIS_YSTRIDE=2,
+	ANALYSIS_XSTRIDE=4,
+	ANALYSIS_YSTRIDE=4,
 
 	DEFAULT_EFFORT_LEVEL=2,
 	L1_NPREDS1=4,
@@ -1024,11 +1025,6 @@ int codec_l1_sse41(int argc, char **argv)
 		guide_save(interleaved+isize, ixcount, blockh);
 		prof_checkpoint(usize, "interleave");
 		{//analysis
-#ifdef ANALYSIS_GRAD
-			const int ystart=1;
-#else
-			const int ystart=0;
-#endif
 			int kx, ky;
 			ALIGN(32) long long counters[OCH_COUNT]={0};
 			__m128i mcounters[OCH_COUNT];//64-bit
@@ -1036,15 +1032,26 @@ int codec_l1_sse41(int argc, char **argv)
 			__m128i wordmask=_mm_set_epi32(0, 0xFFFF, 0, 0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(ky=ystart;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
+#ifdef ANALYSIS_GRAD
+			for(ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
 			{
-				__m128i prev[OCH_COUNT][2];//16-bit
-				memset(prev, 0, sizeof(prev));
-				for(kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				for(kx=1;kx<blockw-(ANALYSIS_XSTRIDE-1);kx+=ANALYSIS_XSTRIDE)
 				{
 					__m128i rg0, gb0, br0;
 					__m128i rg1, gb1, br1;
-#ifdef ANALYSIS_GRAD
+					__m128i rNW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS-ixbytes)+0), half8);
+					__m128i gNW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS-ixbytes)+1), half8);
+					__m128i bNW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS-ixbytes)+2), half8);
+					__m128i rNW1=_mm_srai_epi16(rNW0, 8);
+					__m128i gNW1=_mm_srai_epi16(gNW0, 8);
+					__m128i bNW1=_mm_srai_epi16(bNW0, 8);
+					rNW0=_mm_slli_epi16(rNW0, 8);
+					gNW0=_mm_slli_epi16(gNW0, 8);
+					bNW0=_mm_slli_epi16(bNW0, 8);
+					rNW0=_mm_srai_epi16(rNW0, 8);
+					gNW0=_mm_srai_epi16(gNW0, 8);
+					bNW0=_mm_srai_epi16(bNW0, 8);
+
 					__m128i rN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+0), half8);
 					__m128i gN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+1), half8);
 					__m128i bN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+2), half8);
@@ -1057,7 +1064,117 @@ int codec_l1_sse41(int argc, char **argv)
 					rN0=_mm_srai_epi16(rN0, 8);
 					gN0=_mm_srai_epi16(gN0, 8);
 					bN0=_mm_srai_epi16(bN0, 8);
+
+					__m128i rW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS)+0), half8);
+					__m128i gW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS)+1), half8);
+					__m128i bW0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-3*NCODERS)+2), half8);
+					__m128i rW1=_mm_srai_epi16(rW0, 8);
+					__m128i gW1=_mm_srai_epi16(gW0, 8);
+					__m128i bW1=_mm_srai_epi16(bW0, 8);
+					rW0=_mm_slli_epi16(rW0, 8);
+					gW0=_mm_slli_epi16(gW0, 8);
+					bW0=_mm_slli_epi16(bW0, 8);
+					rW0=_mm_srai_epi16(rW0, 8);
+					gW0=_mm_srai_epi16(gW0, 8);
+					bW0=_mm_srai_epi16(bW0, 8);
+
+					__m128i r0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8);
+					__m128i g0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8);
+					__m128i b0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+2), half8);
+					__m128i r1=_mm_srai_epi16(r0, 8);
+					__m128i g1=_mm_srai_epi16(g0, 8);
+					__m128i b1=_mm_srai_epi16(b0, 8);
+					r0=_mm_slli_epi16(r0, 8);
+					g0=_mm_slli_epi16(g0, 8);
+					b0=_mm_slli_epi16(b0, 8);
+					r0=_mm_srai_epi16(r0, 8);
+					g0=_mm_srai_epi16(g0, 8);
+					b0=_mm_srai_epi16(b0, 8);
+					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
+					r0=_mm_sub_epi16(_mm_sub_epi16(r0, rN0), _mm_sub_epi16(rW0, rNW0));
+					g0=_mm_sub_epi16(_mm_sub_epi16(g0, gN0), _mm_sub_epi16(gW0, gNW0));
+					b0=_mm_sub_epi16(_mm_sub_epi16(b0, bN0), _mm_sub_epi16(bW0, bNW0));
+					r1=_mm_sub_epi16(_mm_sub_epi16(r1, rN1), _mm_sub_epi16(rW1, rNW1));
+					g1=_mm_sub_epi16(_mm_sub_epi16(g1, gN1), _mm_sub_epi16(gW1, gNW1));
+					b1=_mm_sub_epi16(_mm_sub_epi16(b1, bN1), _mm_sub_epi16(bW1, bNW1));
+					r0=_mm_slli_epi16(r0, 2);
+					g0=_mm_slli_epi16(g0, 2);
+					b0=_mm_slli_epi16(b0, 2);
+					r1=_mm_slli_epi16(r1, 2);
+					g1=_mm_slli_epi16(g1, 2);
+					b1=_mm_slli_epi16(b1, 2);
+					rg0=_mm_sub_epi16(r0, g0);
+					gb0=_mm_sub_epi16(g0, b0);
+					br0=_mm_sub_epi16(b0, r0);
+					rg1=_mm_sub_epi16(r1, g1);
+					gb1=_mm_sub_epi16(g1, b1);
+					br1=_mm_sub_epi16(b1, r1);
+#define UPDATE(LANE, IDXA, A0, IDXB, B0, IDXC, C0)\
+	do\
+	{\
+		__m128i ta=A0, tb=B0, tc=C0;\
+		ta=_mm_abs_epi16(ta);\
+		tb=_mm_abs_epi16(tb);\
+		tc=_mm_abs_epi16(tc);\
+		ta=_mm_add_epi16(ta, _mm_srli_epi64(ta, 32));\
+		tb=_mm_add_epi16(tb, _mm_srli_epi64(tb, 32));\
+		tc=_mm_add_epi16(tc, _mm_srli_epi64(tc, 32));\
+		ta=_mm_add_epi16(ta, _mm_srli_epi64(ta, 16));\
+		tb=_mm_add_epi16(tb, _mm_srli_epi64(tb, 16));\
+		tc=_mm_add_epi16(tc, _mm_srli_epi64(tc, 16));\
+		mcounters[IDXA]=_mm_add_epi64(mcounters[IDXA], _mm_and_si128(ta, wordmask));\
+		mcounters[IDXB]=_mm_add_epi64(mcounters[IDXB], _mm_and_si128(tb, wordmask));\
+		mcounters[IDXC]=_mm_add_epi64(mcounters[IDXC], _mm_and_si128(tc, wordmask));\
+	}while(0)
+					UPDATE(0, OCH_YX00, r0, OCH_Y0X0, g0, OCH_Y00X, b0);
+					UPDATE(1, OCH_YX00, r1, OCH_Y0X0, g1, OCH_Y00X, b1);
+					UPDATE(0, OCH_CX40, rg0, OCH_C0X4, gb0, OCH_C40X, br0);
+					UPDATE(1, OCH_CX40, rg1, OCH_C0X4, gb1, OCH_C40X, br1);
+#ifdef ENABLE_RCT_EXTENSION
+					UPDATE(0
+						, OCH_CX31, _mm_add_epi16(rg0, _mm_srai_epi16(gb0, 2))//r-(3*g+b)/4 = r-g-(b-g)/4
+						, OCH_C3X1, _mm_add_epi16(rg0, _mm_srai_epi16(br0, 2))//g-(3*r+b)/4 = g-r-(b-r)/4
+						, OCH_C31X, _mm_add_epi16(br0, _mm_srai_epi16(rg0, 2))//b-(3*r+g)/4 = b-r-(g-r)/4
+					);
+					UPDATE(1
+						, OCH_CX31, _mm_add_epi16(rg1, _mm_srai_epi16(gb1, 2))
+						, OCH_C3X1, _mm_add_epi16(rg1, _mm_srai_epi16(br1, 2))
+						, OCH_C31X, _mm_add_epi16(br1, _mm_srai_epi16(rg1, 2))
+					);
+					UPDATE(0
+						, OCH_CX13, _mm_add_epi16(br0, _mm_srai_epi16(gb0, 2))//r-(g+3*b)/4 = r-b-(g-b)/4
+						, OCH_C1X3, _mm_add_epi16(gb0, _mm_srai_epi16(br0, 2))//g-(r+3*b)/4 = g-b-(r-b)/4
+						, OCH_C13X, _mm_add_epi16(gb0, _mm_srai_epi16(rg0, 2))//b-(r+3*g)/4 = b-g-(r-g)/4
+					);
+					UPDATE(1
+						, OCH_CX13, _mm_add_epi16(br1, _mm_srai_epi16(gb1, 2))
+						, OCH_C1X3, _mm_add_epi16(gb1, _mm_srai_epi16(br1, 2))
+						, OCH_C13X, _mm_add_epi16(gb1, _mm_srai_epi16(rg1, 2))
+					);
+					UPDATE(0
+						, OCH_CX22, _mm_srai_epi16(_mm_sub_epi16(rg0, br0), 1)//r-(g+b)/2 = (r-g + r-b)/2
+						, OCH_C2X2, _mm_srai_epi16(_mm_sub_epi16(gb0, rg0), 1)//g-(r+b)/2 = (g-r + g-b)/2
+						, OCH_C22X, _mm_srai_epi16(_mm_sub_epi16(br0, gb0), 1)//b-(r+g)/2 = (b-r + b-g)/2
+					);
+					UPDATE(1
+						, OCH_CX22, _mm_srai_epi16(_mm_sub_epi16(rg1, br1), 1)
+						, OCH_C2X2, _mm_srai_epi16(_mm_sub_epi16(gb1, rg1), 1)
+						, OCH_C22X, _mm_srai_epi16(_mm_sub_epi16(br1, gb1), 1)
+					);
 #endif
+#undef  UPDATE
+				}
+				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
+			}
+#else
+			for(ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
+			{
+				__m128i prev[OCH_COUNT][2];//16-bit
+				memset(prev, 0, sizeof(prev));
+				for(kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				{
+					__m128i rg0, gb0, br0;
+					__m128i rg1, gb1, br1;
 					__m128i r0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8);
 					__m128i g0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8);
 					__m128i b0=_mm_add_epi8(_mm_load_si128((__m128i*)imptr+2), half8);
@@ -1067,14 +1184,6 @@ int codec_l1_sse41(int argc, char **argv)
 					r0=_mm_cvtepi8_epi16(r0);
 					g0=_mm_cvtepi8_epi16(g0);
 					b0=_mm_cvtepi8_epi16(b0);
-#ifdef ANALYSIS_GRAD
-					r0=_mm_sub_epi16(r0, rN0);
-					g0=_mm_sub_epi16(g0, gN0);
-					b0=_mm_sub_epi16(b0, bN0);
-					r1=_mm_sub_epi16(r1, rN1);
-					g1=_mm_sub_epi16(g1, gN1);
-					b1=_mm_sub_epi16(b1, bN1);
-#endif
 					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
 					r0=_mm_slli_epi16(r0, 2);
 					g0=_mm_slli_epi16(g0, 2);
@@ -1151,6 +1260,7 @@ int codec_l1_sse41(int argc, char **argv)
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
+#endif
 			{
 				int k;
 				for(k=0;k<OCH_COUNT;++k)
@@ -1172,7 +1282,8 @@ int codec_l1_sse41(int argc, char **argv)
 						+counters[rct[2]]
 					;
 #ifdef LOUD
-					printf("%-14s %12lld + %12lld + %12lld = %12lld%s\n"
+					printf("%2d  %-14s %12lld + %12lld + %12lld = %12lld%s\n"
+						, kt
 						, rct_names[kt]
 						, counters[rct[0]]
 						, counters[rct[1]]
