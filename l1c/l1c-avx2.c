@@ -24,6 +24,7 @@
 //	#define TEST_INTERLEAVE
 #endif
 
+//	#define ANALYSIS_GRAD
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave
 //	#define EMULATE_GATHER		//gather is a little faster
@@ -838,21 +839,34 @@ int codec_l1_avx2(int argc, char **argv)
 		guide_save(interleaved+isize, ixcount, blockh);
 		prof_checkpoint(usize, "interleave");
 		{//analysis
+#ifdef ANALYSIS_GRAD
+			const int ystart=1;
+#else
+			const int ystart=0;
+#endif
 			ALIGN(32) int64_t counters[OCH_COUNT]={0};
 			__m256i mcounters[OCH_COUNT];//64-bit
 			__m128i half8=_mm_set1_epi8(-128);
 			__m256i wordmask=_mm256_set1_epi64x(0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(int ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)
+			for(int ky=ystart;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
 				__m256i prev[OCH_COUNT];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				for(int kx=0;kx<blockw;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m256i r=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8));
 					__m256i g=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8));
 					__m256i b=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)imptr+2), half8));
+#ifdef ANALYSIS_GRAD
+					__m256i rN=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+0), half8));
+					__m256i gN=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+1), half8));
+					__m256i bN=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ixbytes)+2), half8));
+					r=_mm256_sub_epi16(r, rN);
+					g=_mm256_sub_epi16(g, gN);
+					b=_mm256_sub_epi16(b, bN);
+#endif
 					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
 					r=_mm256_slli_epi16(r, 2);
 					g=_mm256_slli_epi16(g, 2);
@@ -860,18 +874,18 @@ int codec_l1_avx2(int argc, char **argv)
 					__m256i rg=_mm256_sub_epi16(r, g);
 					__m256i gb=_mm256_sub_epi16(g, b);
 					__m256i br=_mm256_sub_epi16(b, r);
-#ifdef ENABLE_RCT_EXTENSION
-					__m256i t0, t1, t2;
-#endif
-#define UPDATE(IDXA, IDXB, IDXC, A0, B0, C0)\
+#define UPDATE(IDXA, A0, IDXB, B0, IDXC, C0)\
 	do\
 	{\
-		__m256i ta=_mm256_sub_epi16(A0, prev[IDXA]);\
-		__m256i tb=_mm256_sub_epi16(B0, prev[IDXB]);\
-		__m256i tc=_mm256_sub_epi16(C0, prev[IDXC]);\
-		prev[IDXA]=A0;\
-		prev[IDXB]=B0;\
-		prev[IDXC]=C0;\
+		__m256i sa=A0;\
+		__m256i sb=B0;\
+		__m256i sc=C0;\
+		__m256i ta=_mm256_sub_epi16(sa, prev[IDXA]);\
+		__m256i tb=_mm256_sub_epi16(sb, prev[IDXB]);\
+		__m256i tc=_mm256_sub_epi16(sc, prev[IDXC]);\
+		prev[IDXA]=sa;\
+		prev[IDXB]=sb;\
+		prev[IDXC]=sc;\
 		ta=_mm256_abs_epi16(ta);\
 		tb=_mm256_abs_epi16(tb);\
 		tc=_mm256_abs_epi16(tc);\
@@ -885,21 +899,24 @@ int codec_l1_avx2(int argc, char **argv)
 		mcounters[IDXB]=_mm256_add_epi64(mcounters[IDXB], _mm256_and_si256(tb, wordmask));\
 		mcounters[IDXC]=_mm256_add_epi64(mcounters[IDXC], _mm256_and_si256(tc, wordmask));\
 	}while(0)
-					UPDATE(OCH_YX00, OCH_Y0X0, OCH_Y00X, r, g, b);
-					UPDATE(OCH_CX40, OCH_C0X4, OCH_C40X, rg, gb, br);
+					UPDATE(OCH_YX00, r, OCH_Y0X0, g, OCH_Y00X, b);
+					UPDATE(OCH_CX40, rg, OCH_C0X4, gb, OCH_C40X, br);
 #ifdef ENABLE_RCT_EXTENSION
-					t0=_mm256_add_epi16(rg, _mm256_srai_epi16(gb, 2));//r-(3*g+b)/4 = r-g-(b-g)/4
-					t1=_mm256_add_epi16(rg, _mm256_srai_epi16(br, 2));//g-(3*r+b)/4 = g-r-(b-r)/4
-					t2=_mm256_add_epi16(br, _mm256_srai_epi16(rg, 2));//b-(3*r+g)/4 = b-r-(g-r)/4
-					UPDATE(OCH_CX31, OCH_C3X1, OCH_C31X, t0, t1, t2);
-					t0=_mm256_add_epi16(br, _mm256_srai_epi16(gb, 2));//r-(g+3*b)/4 = r-b-(g-b)/4
-					t1=_mm256_add_epi16(gb, _mm256_srai_epi16(br, 2));//g-(r+3*b)/4 = g-b-(r-b)/4
-					t2=_mm256_add_epi16(gb, _mm256_srai_epi16(rg, 2));//b-(r+3*g)/4 = b-g-(r-g)/4
-					UPDATE(OCH_CX13, OCH_C1X3, OCH_C13X, t0, t1, t2);
-					t0=_mm256_srai_epi16(_mm256_sub_epi16(rg, br), 1);//r-(g+b)/2 = (r-g + r-b)/2
-					t1=_mm256_srai_epi16(_mm256_sub_epi16(gb, rg), 1);//g-(r+b)/2 = (g-r + g-b)/2
-					t2=_mm256_srai_epi16(_mm256_sub_epi16(br, gb), 1);//b-(r+g)/2 = (b-r + b-g)/2
-					UPDATE(OCH_CX22, OCH_C2X2, OCH_C22X, t0, t1, t2);
+					UPDATE(
+						OCH_CX31, _mm256_add_epi16(rg, _mm256_srai_epi16(gb, 2)),//r-(3*g+b)/4 = r-g-(b-g)/4
+						OCH_C3X1, _mm256_add_epi16(rg, _mm256_srai_epi16(br, 2)),//g-(3*r+b)/4 = g-r-(b-r)/4
+						OCH_C31X, _mm256_add_epi16(br, _mm256_srai_epi16(rg, 2)) //b-(3*r+g)/4 = b-r-(g-r)/4
+					);
+					UPDATE(
+						OCH_CX13, _mm256_add_epi16(br, _mm256_srai_epi16(gb, 2)),//r-(g+3*b)/4 = r-b-(g-b)/4
+						OCH_C1X3, _mm256_add_epi16(gb, _mm256_srai_epi16(br, 2)),//g-(r+3*b)/4 = g-b-(r-b)/4
+						OCH_C13X, _mm256_add_epi16(gb, _mm256_srai_epi16(rg, 2)) //b-(r+3*g)/4 = b-g-(r-g)/4
+					);
+					UPDATE(
+						OCH_CX22,_mm256_srai_epi16(_mm256_sub_epi16(rg, br), 1),//r-(g+b)/2 = (r-g + r-b)/2
+						OCH_C2X2,_mm256_srai_epi16(_mm256_sub_epi16(gb, rg), 1),//g-(r+b)/2 = (g-r + g-b)/2
+						OCH_C22X,_mm256_srai_epi16(_mm256_sub_epi16(br, gb), 1) //b-(r+g)/2 = (b-r + b-g)/2
+					);
 #endif
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);

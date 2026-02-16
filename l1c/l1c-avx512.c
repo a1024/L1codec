@@ -24,6 +24,7 @@
 //	#define TEST_INTERLEAVE
 #endif
 
+//	#define ANALYSIS_GRAD
 //	#define USE_L2			//bad
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//tailored for 64 lanes		2.5x faster interleave
@@ -808,17 +809,22 @@ int codec_l1_avx512(int argc, char **argv)
 		guide_save(interleaved+isize, ixcount, blockh);
 		prof_checkpoint(usize, "interleave");
 		{//analysis
+#ifdef ANALYSIS_GRAD
+			const int ystart=1;
+#else
+			const int ystart=0;
+#endif
 			int64_t counters[OCH_COUNT]={0};
 			__m512i mcounters[OCH_COUNT];//64-bit
 			__m256i half8=_mm256_set1_epi8(-128);
 			__m512i wordmask=_mm512_set1_epi64(0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize;
-			for(int ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)
+			for(int ky=ystart;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
 				__m512i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				for(int kx=0;kx<blockw;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m512i r0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+0), half8));
 					__m512i r1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+1), half8));
@@ -826,6 +832,20 @@ int codec_l1_avx512(int argc, char **argv)
 					__m512i g1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+3), half8));
 					__m512i b0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+4), half8));
 					__m512i b1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+5), half8));
+#ifdef ANALYSIS_GRAD
+					__m512i rN0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+0), half8));
+					__m512i rN1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+1), half8));
+					__m512i gN0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+2), half8));
+					__m512i gN1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+3), half8));
+					__m512i bN0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+4), half8));
+					__m512i bN1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+5), half8));
+					r0=_mm512_sub_epi16(r0, rN0);
+					g0=_mm512_sub_epi16(g0, gN0);
+					b0=_mm512_sub_epi16(b0, bN0);
+					r1=_mm512_sub_epi16(r1, rN1);
+					g1=_mm512_sub_epi16(g1, gN1);
+					b1=_mm512_sub_epi16(b1, bN1);
+#endif
 					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
 					r0=_mm512_slli_epi16(r0, 2);
 					g0=_mm512_slli_epi16(g0, 2);
@@ -839,7 +859,7 @@ int codec_l1_avx512(int argc, char **argv)
 					__m512i rg1=_mm512_sub_epi16(r1, g1);
 					__m512i gb1=_mm512_sub_epi16(g1, b1);
 					__m512i br1=_mm512_sub_epi16(b1, r1);
-#define UPDATE(IDXA, IDXB, IDXC, A0, B0, C0, LANE)\
+#define UPDATE(LANE, IDXA, A0, IDXB, B0, IDXC, C0)\
 	do\
 	{\
 		__m512i t0=A0, t1=B0, t2=C0;\
@@ -862,48 +882,43 @@ int codec_l1_avx512(int argc, char **argv)
 		mcounters[IDXB]=_mm512_add_epi64(mcounters[IDXB], _mm512_and_si512(tb, wordmask));\
 		mcounters[IDXC]=_mm512_add_epi64(mcounters[IDXC], _mm512_and_si512(tc, wordmask));\
 	}while(0)
-					UPDATE(OCH_YX00, OCH_Y0X0, OCH_Y00X, r0, g0, b0, 0);
-					UPDATE(OCH_YX00, OCH_Y0X0, OCH_Y00X, r1, g1, b1, 1);
-					UPDATE(OCH_CX40, OCH_C0X4, OCH_C40X, rg0, gb0, br0, 0);
-					UPDATE(OCH_CX40, OCH_C0X4, OCH_C40X, rg1, gb1, br1, 1);
+					UPDATE(0, OCH_YX00, r0, OCH_Y0X0, g0, OCH_Y00X, b0);
+					UPDATE(1, OCH_YX00, r1, OCH_Y0X0, g1, OCH_Y00X, b1);
+					UPDATE(0, OCH_CX40, rg0, OCH_C0X4, gb0, OCH_C40X, br0);
+					UPDATE(1, OCH_CX40, rg1, OCH_C0X4, gb1, OCH_C40X, br1);
 #ifdef ENABLE_RCT_EXTENSION
-					UPDATE(OCH_CX31, OCH_C3X1, OCH_C31X,
-						_mm512_add_epi16(rg0, _mm512_srai_epi16(gb0, 2)),//r-(3*g+b)/4 = r-g-(b-g)/4
-						_mm512_add_epi16(rg0, _mm512_srai_epi16(br0, 2)),//g-(3*r+b)/4 = g-r-(b-r)/4
-						_mm512_add_epi16(br0, _mm512_srai_epi16(rg0, 2)),//b-(3*r+g)/4 = b-r-(g-r)/4
-						0
+					UPDATE(0
+						, OCH_CX31, _mm512_add_epi16(rg0, _mm512_srai_epi16(gb0, 2))//r-(3*g+b)/4 = r-g-(b-g)/4
+						, OCH_C3X1, _mm512_add_epi16(rg0, _mm512_srai_epi16(br0, 2))//g-(3*r+b)/4 = g-r-(b-r)/4
+						, OCH_C31X, _mm512_add_epi16(br0, _mm512_srai_epi16(rg0, 2))//b-(3*r+g)/4 = b-r-(g-r)/4
 					);
-					UPDATE(OCH_CX31, OCH_C3X1, OCH_C31X,
-						_mm512_add_epi16(rg1, _mm512_srai_epi16(gb1, 2)),
-						_mm512_add_epi16(rg1, _mm512_srai_epi16(br1, 2)),
-						_mm512_add_epi16(br1, _mm512_srai_epi16(rg1, 2)),
-						1
+					UPDATE(1
+						, OCH_CX31, _mm512_add_epi16(rg1, _mm512_srai_epi16(gb1, 2))
+						, OCH_C3X1, _mm512_add_epi16(rg1, _mm512_srai_epi16(br1, 2))
+						, OCH_C31X, _mm512_add_epi16(br1, _mm512_srai_epi16(rg1, 2))
 					);
-					UPDATE(OCH_CX13, OCH_C1X3, OCH_C13X,
-						_mm512_add_epi16(br0, _mm512_srai_epi16(gb0, 2)),//r-(g+3*b)/4 = r-b-(g-b)/4
-						_mm512_add_epi16(gb0, _mm512_srai_epi16(br0, 2)),//g-(r+3*b)/4 = g-b-(r-b)/4
-						_mm512_add_epi16(gb0, _mm512_srai_epi16(rg0, 2)),//b-(r+3*g)/4 = b-g-(r-g)/4
-						0
+					UPDATE(0
+						, OCH_CX13, _mm512_add_epi16(br0, _mm512_srai_epi16(gb0, 2))//r-(g+3*b)/4 = r-b-(g-b)/4
+						, OCH_C1X3, _mm512_add_epi16(gb0, _mm512_srai_epi16(br0, 2))//g-(r+3*b)/4 = g-b-(r-b)/4
+						, OCH_C13X, _mm512_add_epi16(gb0, _mm512_srai_epi16(rg0, 2))//b-(r+3*g)/4 = b-g-(r-g)/4
 					);
-					UPDATE(OCH_CX13, OCH_C1X3, OCH_C13X,
-						_mm512_add_epi16(br1, _mm512_srai_epi16(gb1, 2)),
-						_mm512_add_epi16(gb1, _mm512_srai_epi16(br1, 2)),
-						_mm512_add_epi16(gb1, _mm512_srai_epi16(rg1, 2)),
-						1
+					UPDATE(1
+						, OCH_CX13, _mm512_add_epi16(br1, _mm512_srai_epi16(gb1, 2))
+						, OCH_C1X3, _mm512_add_epi16(gb1, _mm512_srai_epi16(br1, 2))
+						, OCH_C13X, _mm512_add_epi16(gb1, _mm512_srai_epi16(rg1, 2))
 					);
-					UPDATE(OCH_CX22, OCH_C2X2, OCH_C22X,
-						_mm512_srai_epi16(_mm512_sub_epi16(rg0, br0), 1),//r-(g+b)/2 = (r-g + r-b)/2
-						_mm512_srai_epi16(_mm512_sub_epi16(gb0, rg0), 1),//g-(r+b)/2 = (g-r + g-b)/2
-						_mm512_srai_epi16(_mm512_sub_epi16(br0, gb0), 1),//b-(r+g)/2 = (b-r + b-g)/2
-						0
+					UPDATE(0
+						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg0, br0), 1)//r-(g+b)/2 = (r-g + r-b)/2
+						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb0, rg0), 1)//g-(r+b)/2 = (g-r + g-b)/2
+						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br0, gb0), 1)//b-(r+g)/2 = (b-r + b-g)/2
 					);
-					UPDATE(OCH_CX22, OCH_C2X2, OCH_C22X,
-						_mm512_srai_epi16(_mm512_sub_epi16(rg1, br1), 1),
-						_mm512_srai_epi16(_mm512_sub_epi16(gb1, rg1), 1),
-						_mm512_srai_epi16(_mm512_sub_epi16(br1, gb1), 1),
-						1
+					UPDATE(1
+						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg1, br1), 1)
+						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb1, rg1), 1)
+						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br1, gb1), 1)
 					);
 #endif
+#undef  UPDATE
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}

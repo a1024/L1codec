@@ -17,10 +17,10 @@ int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
-	#define CODEC codec_l1_ssse3
+//	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
 //	#define CODEC codec_l1_avx2
-//	#define CODEC codec_l1_avx512
+	#define CODEC codec_l1_avx512
 
 
 #ifdef ENABLE_GUIDE
@@ -133,14 +133,14 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/big_building.PPM"
 	//	"C:/Projects/datasets/dataset-CLIC303-ppm/2048x1320_abigail-keenan-27293.ppm"
 	//	"C:/Projects/datasets/dataset-CLIC30-ppm/03.ppm"
-		"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
+	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/dataset-DIV2K-ppm/0801.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-06.ppm"
 	//	"C:/Projects/datasets/dataset-kodak-ppm/kodim23.ppm"
-	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+		"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/PIA12811.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/PIA13882.ppm"
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 		argv[0],
 		srcfn,
 		tmpfn,
-	//	"2",
+		"2",
 	//	"3",//near
 	};
 	const char *decargs[]=
