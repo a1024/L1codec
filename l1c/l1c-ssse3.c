@@ -9,12 +9,12 @@
 #include<stdint.h>
 //#define _USE_MATH_DEFINES
 #include<math.h>
+//#ifdef _MSC_VER
+//#include<intrin.h>
+//#else
+//#include<x86intrin.h>
+//#endif
 #include<tmmintrin.h>//SSSE3
-#ifdef _MSC_VER
-#include<intrin.h>
-#else
-#include<x86intrin.h>
-#endif
 #include<sys/stat.h>
 
 
