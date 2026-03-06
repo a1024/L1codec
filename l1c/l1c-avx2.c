@@ -25,6 +25,7 @@
 //	#define TEST_INTERLEAVE
 #endif
 
+//	#define MIX5
 	#define ANALYSIS_GRAD
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave
@@ -41,10 +42,14 @@ enum
 	ANALYSIS_YSTRIDE=4,
 
 	DEFAULT_EFFORT_LEVEL=2,
+#ifdef MIX5
+	L1_NPREDS1=5,
+#else
 	L1_NPREDS1=4,
+#endif
 	L1_NPREDS2=8,
 	L1_NPREDS3=20,
-	L1_SH1=15,	//L1SH1 <= 16
+	L1_SH1=16,	//L1SH1 <= 16
 	L1_SH2=17,	//L1SH2 >= 16
 	L1_SH3=19,	//L1SH3 >= 16
 
@@ -1188,6 +1193,9 @@ int codec_l1_avx2(int argc, char **argv)
 		ALIGN(32) uint16_t syms[3*NCODERS]={0};
 		__m256i NW[3], N[3], W[3];
 		__m256i eW[3], ecurr[3], eNEE[3], eNEEE[3];
+#ifdef MIX5
+		__m256i cW[3];
+#endif
 		memset(NW, 0, sizeof(NW));
 		memset(N, 0, sizeof(N));
 		memset(W, 0, sizeof(W));
@@ -1195,6 +1203,9 @@ int codec_l1_avx2(int argc, char **argv)
 		memset(ecurr, 0, sizeof(ecurr));
 		memset(eNEE, 0, sizeof(eNEE));
 		memset(eNEEE, 0, sizeof(eNEEE));
+#ifdef MIX5
+		memset(cW, 0, sizeof(cW));
+#endif
 		//int16_t[blockw+2*XPAD][NCH*NROWS*NVAL*NCODERS]	(__m256i*)rows[1]+E+(C+X*NCH)*NROWS*NVAL
 		eNEE[0]=_mm256_load_si256((__m256i*)rows[1]+1+(0+2*NCH)*NROWS*NVAL);
 		eNEE[1]=_mm256_load_si256((__m256i*)rows[1]+1+(1+2*NCH)*NROWS*NVAL);
@@ -1291,31 +1302,36 @@ int codec_l1_avx2(int argc, char **argv)
 					3	NE
 					*/
 
+					//W
+					L1preds[0*3+0]=W[0];
+					L1preds[0*3+1]=W[1];
+					L1preds[0*3+2]=W[2];
+
 					//N+W-NW
-					L1preds[0*3+0]=predY;
-					L1preds[0*3+1]=predU;
-					L1preds[0*3+2]=predV;
+					L1preds[1*3+0]=predY;
+					L1preds[1*3+1]=predU;
+					L1preds[1*3+2]=predV;
 
 					//2*N-NN
-					L1preds[1*3+0]=_mm256_sub_epi16(_mm256_add_epi16(N[0], N[0]), _mm256_load_si256((__m256i*)rows[2]+0+(0+0*NCH)*NROWS*NVAL));
-					L1preds[1*3+1]=_mm256_sub_epi16(_mm256_add_epi16(N[1], N[1]), _mm256_load_si256((__m256i*)rows[2]+0+(1+0*NCH)*NROWS*NVAL));
-					L1preds[1*3+2]=_mm256_sub_epi16(_mm256_add_epi16(N[2], N[2]), _mm256_load_si256((__m256i*)rows[2]+0+(2+0*NCH)*NROWS*NVAL));
+					L1preds[2*3+0]=_mm256_sub_epi16(_mm256_add_epi16(N[0], N[0]), _mm256_load_si256((__m256i*)rows[2]+0+(0+0*NCH)*NROWS*NVAL));
+					L1preds[2*3+1]=_mm256_sub_epi16(_mm256_add_epi16(N[1], N[1]), _mm256_load_si256((__m256i*)rows[2]+0+(1+0*NCH)*NROWS*NVAL));
+					L1preds[2*3+2]=_mm256_sub_epi16(_mm256_add_epi16(N[2], N[2]), _mm256_load_si256((__m256i*)rows[2]+0+(2+0*NCH)*NROWS*NVAL));
 
 				//	//N
-				//	L1preds[1*3+0]=N[0];
-				//	L1preds[1*3+1]=N[1];
-				//	L1preds[1*3+2]=N[2];
-
-					//W
-					L1preds[2*3+0]=W[0];
-					L1preds[2*3+1]=W[1];
-					L1preds[2*3+2]=W[2];
+				//	L1preds[2*3+0]=N[0];
+				//	L1preds[2*3+1]=N[1];
+				//	L1preds[2*3+2]=N[2];
 
 					//NE
 					L1preds[3*3+0]=_mm256_load_si256((__m256i*)rows[1]+0+(0+1*NCH)*NROWS*NVAL);
 					L1preds[3*3+1]=_mm256_load_si256((__m256i*)rows[1]+0+(1+1*NCH)*NROWS*NVAL);
 					L1preds[3*3+2]=_mm256_load_si256((__m256i*)rows[1]+0+(2+1*NCH)*NROWS*NVAL);
-					
+#ifdef MIX5
+					//NE
+					L1preds[3*3+0]=cW[0];
+					L1preds[3*3+1]=cW[1];
+					L1preds[3*3+2]=cW[2];
+#endif
 
 					//mix
 					__m256i mp[6], t[6];
@@ -2390,6 +2406,11 @@ int codec_l1_avx2(int argc, char **argv)
 			eW[0]=_mm256_avg_epu16(eW[0], ecurr[0]);
 			eW[1]=_mm256_avg_epu16(eW[1], ecurr[1]);
 			eW[2]=_mm256_avg_epu16(eW[2], ecurr[2]);
+#ifdef MIX5
+			cW[0]=_mm256_sub_epi16(W[0], predYUV0[0]);
+			cW[1]=_mm256_sub_epi16(W[1], predYUV0[1]);
+			cW[2]=_mm256_sub_epi16(W[2], predYUV0[2]);
+#endif
 
 			_mm256_store_si256((__m256i*)rows[0]+1+(0+0*NCH)*NROWS*NVAL, eW[0]);//store current contexts
 			_mm256_store_si256((__m256i*)rows[0]+1+(1+0*NCH)*NROWS*NVAL, eW[1]);
