@@ -14,23 +14,16 @@
 #endif
 
 
-#ifdef _MSC_VER
-	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
-
-//	#define ANS_VAL			//DEBUG
-#endif
-
-
 //macros
 #ifdef _MSC_VER
 #	define ALIGN(N) __declspec(align(N))
-#	define AWM_INLINE __forceinline static
+#	define INLINE __forceinline static
 #if _MSC_VER<1900
 #define snprintf sprintf_s
 #endif
 #else
 #	define ALIGN(N) __attribute__((aligned(N)))
-#	define AWM_INLINE __attribute__((always_inline)) inline static
+#	define INLINE __attribute__((always_inline)) inline static
 #	ifndef _countof
 #		define _countof(A) (sizeof(A)/sizeof(*(A)))
 #	endif
@@ -43,33 +36,35 @@
 		if((X)>(HI))X=HI;\
 	}while(0)
 
-#if defined _M_X64 || defined __x86_64__
-#define FLOOR_LOG2(X)\
-	(sizeof(X)==8?63-(int32_t)_lzcnt_u64(X):31-_lzcnt_u32((uint32_t)(X)))
+#if defined SOFT_LG2 //defined _M_X64 || defined __x86_64__
+INLINE int floor_log2_64(uint64_t n)
+{
+	int logn, sh;
+
+	logn=-!n;
+	sh=(n>=1ULL<<32)<<5;	logn+=sh, n>>=sh;
+	sh=(n>=1   <<16)<<4;	logn+=sh, n>>=sh;
+	sh=(n>=1   << 8)<<3;	logn+=sh, n>>=sh;
+	sh=(n>=1   << 4)<<2;	logn+=sh, n>>=sh;
+	sh=(n>=1   << 2)<<1;	logn+=sh, n>>=sh;
+	sh= n>=1   << 1;	logn+=sh;
+	return logn;
+}
+INLINE int floor_log2_32(uint32_t n)
+{
+	int logn, sh;
+
+	logn=-!n;
+	sh=(n>=1<<16)<<4;	logn+=sh, n>>=sh;
+	sh=(n>=1<< 8)<<3;	logn+=sh, n>>=sh;
+	sh=(n>=1<< 4)<<2;	logn+=sh, n>>=sh;
+	sh=(n>=1<< 2)<<1;	logn+=sh, n>>=sh;
+	sh= n>=1<< 1;		logn+=sh;
+	return logn;
+}
+#define FLOOR_LOG2(X) (sizeof(X)==8?floor_log2_64(X):floor_log2_32((uint32_t)(X)))
 #else
-AWM_INLINE int floor_log2_64(uint64_t n)
-{
-	int	logn=-!n;
-	int	sh=(n>=1ULL<<32)<<5;	logn+=sh, n>>=sh;
-		sh=(n>=1<<16)<<4;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 8)<<3;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 4)<<2;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 2)<<1;	logn+=sh, n>>=sh;
-		sh= n>=1<< 1;		logn+=sh;
-	return logn;
-}
-AWM_INLINE int floor_log2_32(uint32_t n)
-{
-	int	logn=-!n;
-	int	sh=(n>=1<<16)<<4;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 8)<<3;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 4)<<2;	logn+=sh, n>>=sh;
-		sh=(n>=1<< 2)<<1;	logn+=sh, n>>=sh;
-		sh= n>=1<< 1;		logn+=sh;
-	return logn;
-}
-#define FLOOR_LOG2(X)\
-	(sizeof(X)==8?floor_log2_64(X):floor_log2_32((uint32_t)(X)))
+#define FLOOR_LOG2(X) (sizeof(X)==8?63-(int32_t)_lzcnt_u64(X):31-_lzcnt_u32((uint32_t)(X)))
 #endif
 
 
@@ -266,8 +261,8 @@ static int colorprintf(int textcolor, int bkcolor, const char *format, ...)//0x0
 //application-specific
 #ifdef ENABLE_GUIDE
 static int g_iw=0, g_ih=0;
-extern unsigned char *g_image;//debug.c
-extern double g_sqe[3];
+static unsigned char *g_image=0;
+static double g_sqe[3]={0};
 static void guide_save(const unsigned char *image, int iw, int ih)
 {
 	int size=3*iw*ih;
@@ -661,8 +656,8 @@ typedef struct _ANSVALHeader
 	struct _ANSVALHeader *above, *below;
 	unsigned char data[];
 } ANSVALNode;
-extern ANSVALNode *debugstack;
-extern int ansvalidx, ansvalmax;
+static ANSVALNode *debugstack=0;
+static int ansvalidx=0, ansvalmax=0;
 static void ansval_push(const void *data, int esize, int count)
 {
 	int size=count*esize;
@@ -808,7 +803,7 @@ typedef struct _BitPackerLIFO//bwd enc / fwd dec
 	uint8_t *dstbwdptr;
 	const uint8_t *srcfwdptr, *streamend;
 } BitPackerLIFO;
-AWM_INLINE void bitpacker_enc_init(BitPackerLIFO *ec, const uint8_t *bufstart, uint8_t *bufptr0_OOB)
+INLINE void bitpacker_enc_init(BitPackerLIFO *ec, const uint8_t *bufstart, uint8_t *bufptr0_OOB)
 {
 	memset(ec, 0, sizeof(*ec));
 	ec->state=1ULL<<32;
@@ -816,7 +811,7 @@ AWM_INLINE void bitpacker_enc_init(BitPackerLIFO *ec, const uint8_t *bufstart, u
 	ec->streamend=bufstart;
 	ec->dstbwdptr=bufptr0_OOB;
 }
-AWM_INLINE void bitpacker_dec_init(BitPackerLIFO *ec, const uint8_t *bufptr0_start, const uint8_t *bufend)
+INLINE void bitpacker_dec_init(BitPackerLIFO *ec, const uint8_t *bufptr0_start, const uint8_t *bufend)
 {
 	memset(ec, 0, sizeof(*ec));
 	ec->srcfwdptr=bufptr0_start+8;
@@ -824,7 +819,7 @@ AWM_INLINE void bitpacker_dec_init(BitPackerLIFO *ec, const uint8_t *bufptr0_sta
 	ec->state=*(const uint64_t*)bufptr0_start;
 	ec->dec_navailable=FLOOR_LOG2(ec->state)+1;
 }
-AWM_INLINE void bitpacker_enc_flush(BitPackerLIFO *ec)
+INLINE void bitpacker_enc_flush(BitPackerLIFO *ec)
 {
 	ec->dstbwdptr-=8;
 #ifdef _DEBUG
@@ -833,7 +828,7 @@ AWM_INLINE void bitpacker_enc_flush(BitPackerLIFO *ec)
 #endif
 	*(uint64_t*)ec->dstbwdptr=ec->state;
 }
-AWM_INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
+INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
 {
 #ifdef _DEBUG
 	if(inbits>BITPACKERMAX)
@@ -861,7 +856,7 @@ AWM_INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
 	ansval_push(&ec->state, sizeof(ec->state), 1);
 #endif
 }
-AWM_INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
+INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
 {
 	int sym;
 
@@ -902,7 +897,7 @@ typedef struct _rANS_SIMD_SymInfo	//16 bytes/level	4KB/ctx = 1<<12 bytes
 	uint32_t smax, invf, cdf;
 	uint16_t negf, sh;
 } rANS_SIMD_SymInfo;
-static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypassmask, int ctxidx, int sse41)
+static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypassmask, int ctxidx, int sse41, int oneshift)
 {
 #ifdef ESTIMATE_SIZE
 	int count0=0, sum0=0;
@@ -1087,6 +1082,8 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 #endif
 			if(sse41)
 				info->sh=1<<(PROBBITS-1-info->sh);
+			else if(oneshift)
+				info->sh+=32;
 		}
 	}
 }
@@ -1135,6 +1132,9 @@ static void enc_packhist(BitPackerLIFO *ec, const int *hist, uint64_t bypassmask
 			nbypass=freq>>PROBBITS;
 			freq&=(1<<PROBBITS)-1;
 			nzeros=freq>>nbypass, bypass=freq&((1<<nbypass)-1);
+#ifdef ANS_VAL
+			ansval_push(&freq, sizeof(freq), 1);
+#endif
 			if(nbypass)
 				bitpacker_enc(ec, nbypass, bypass);
 			bitpacker_enc(ec, 1, 1);
@@ -1186,6 +1186,9 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 			}while(!bit);
 			if(nbypass)
 				freq=freq<<nbypass|bitpacker_dec(ec, nbypass);
+#ifdef ANS_VAL
+			ansval_check(&freq, sizeof(freq), 1);
+#endif
 
 			CDF[ks]=freq;
 			CDFlevels-=freq;
@@ -1297,6 +1300,68 @@ static void decorr1d(uint8_t *data, int count, int bytestride, int bestrct, int 
 		prevv=4*v-offset;
 		ptr+=bytestride;
 	}
+}
+static void encode1d_port(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
+{
+	uint8_t *streamptr=*pstreamptr;
+	unsigned state=*pstate;
+	uint8_t *ptr=data+(count-(ptrdiff_t)1)*bytestride;
+	const rANS_SIMD_SymInfo *info=0;
+	int k;
+	for(k=0;k<count;++k)
+	{
+		info=rsyminfo+ptr[2]+256*2;
+		if(state>info->smax)
+		{
+			streamptr-=2;
+#ifdef _DEBUG
+			if(streamptr<=streamend)//"streamend" is buffer start
+				CRASH("OOB ptr %016zX <= %016zX", streamptr, streamend);
+#endif
+			*(uint16_t*)streamptr=(uint16_t)state;
+			state>>=RANS_RENORM_BITS;
+		}
+		//state += ((state*invf>>32)*(1<<(11-sh))>>11)*negf+cdf
+		state+=(uint32_t)((uint64_t)state*info->invf>>info->sh)*info->negf+info->cdf;
+#ifdef ANS_VAL
+		ansval_push(&state, sizeof(state), 1);
+#endif
+
+		info=rsyminfo+ptr[1]+256*1;
+		if(state>info->smax)
+		{
+			streamptr-=2;
+#ifdef _DEBUG
+			if(streamptr<=streamend)
+				CRASH("OOB ptr %016zX <= %016zX", streamptr, streamend);
+#endif
+			*(uint16_t*)streamptr=(uint16_t)state;
+			state>>=RANS_RENORM_BITS;
+		}
+		state+=(uint32_t)((uint64_t)state*info->invf>>info->sh)*info->negf+info->cdf;
+#ifdef ANS_VAL
+		ansval_push(&state, sizeof(state), 1);
+#endif
+
+		info=rsyminfo+ptr[0]+256*0;
+		if(state>info->smax)
+		{
+			streamptr-=2;
+#ifdef _DEBUG
+			if(streamptr<=streamend)
+				CRASH("OOB ptr %016zX <= %016zX", streamptr, streamend);
+#endif
+			*(uint16_t*)streamptr=(uint16_t)state;
+			state>>=RANS_RENORM_BITS;
+		}
+		state+=(uint32_t)((uint64_t)state*info->invf>>info->sh)*info->negf+info->cdf;
+#ifdef ANS_VAL
+		ansval_push(&state, sizeof(state), 1);
+#endif
+		ptr-=bytestride;
+	}
+	*pstreamptr=streamptr;
+	*pstate=state;
 }
 static void encode1d_sse41(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
 {

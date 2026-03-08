@@ -19,9 +19,9 @@ LIBS += -lm
 endif
 
 
-x64:	l1c-sse41  l1c-avx2  l1c-avx512
+x64:	l1c-sse41  l1c-avx2  l1c-avx512 l1c-port-x64
 #l1c-sse41-linux  l1c-avx2-linux
-x86:	l1c-ssse3-x86  l1c-sse41-x86
+x86:	l1c-ssse3-x86  l1c-sse41-x86 l1c-port-x86
 
 
 l1c-avx2:	l1c-avx2.c
@@ -29,6 +29,12 @@ l1c-avx2:	l1c-avx2.c
 
 #l1c-avx2-prof:	l1c-avx2.c
 #	clang -Wall -O2 -g -fprofile-instr-generate -fcoverage-mapping -mavx2 -mlzcnt -Dcodec_l1_avx2=main l1c-avx2.c -o l1c-avx2-prof $(LIBS)
+
+l1c-port-x64:
+	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x64
+
+l1c-port-x86:
+	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86
 
 
 l1c-sse41:	l1c-sse41.c

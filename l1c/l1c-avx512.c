@@ -23,8 +23,12 @@
 
 //	#define SAVE_RESIDUALS
 //	#define TEST_INTERLEAVE
+
+	#define ENABLE_GUIDE		//DEBUG		checks interleaved pixels
+//	#define ANS_VAL			//DEBUG
 #endif
 
+	#define MIX5
 	#define ANALYSIS_GRAD
 //	#define USE_L2			//bad
 	#define ENABLE_RCT_EXTENSION
@@ -41,8 +45,12 @@ enum
 	ANALYSIS_XSTRIDE=4,
 	ANALYSIS_YSTRIDE=4,
 
-	DEFAULT_EFFORT_LEVEL=2,
+	DEFAULT_EFFORT_LEVEL=1,
+#ifdef MIX5
+	L1_NPREDS1=5,
+#else
 	L1_NPREDS1=4,
+#endif
 	L1_NPREDS2=8,
 	L1_NPREDS3=20,
 	L1_SH1=16,	//L1SH1 <= 16
@@ -65,7 +73,7 @@ enum
 
 #define COMMON_rANS
 #include"common.h"
-AWM_INLINE void gather32(int *dst, const int *src, const int *offsets)
+INLINE void gather32(int *dst, const int *src, const int *offsets)
 {
 #ifdef EMULATE_GATHER
 	volatile int *ptr=dst;
@@ -89,7 +97,7 @@ AWM_INLINE void gather32(int *dst, const int *src, const int *offsets)
 	_mm512_store_si512((__m512i*)dst, _mm512_i32gather_epi32(_mm512_load_si512((__m512i*)offsets), src, sizeof(int)));
 #endif
 }
-AWM_INLINE void dec_yuv(
+INLINE void dec_yuv(
 	__m512i *mstate,
 	const __m512i *ctx0,
 	const uint32_t *CDF2syms,
@@ -217,7 +225,7 @@ AWM_INLINE void dec_yuv(
 	*pstreamptr=(uint8_t*)(size_t)streamptr;
 }
 
-AWM_INLINE void transpose8(__m512i *data)
+INLINE void transpose8(__m512i *data)
 {
 #if 1
 	__m512i swap1=_mm512_set_epi8(
@@ -815,7 +823,7 @@ int codec_l1_avx512(int argc, char **argv)
 			__m256i half8=_mm256_set1_epi8(-128);
 			__m512i wordmask=_mm512_set1_epi64(0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
-			imptr=interleaved+isize;
+			imptr=interleaved+isize+ixbytes+3*NCODERS;
 #ifdef ANALYSIS_GRAD
 			for(int ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
@@ -1166,6 +1174,9 @@ int codec_l1_avx512(int argc, char **argv)
 		ALIGN(64) uint16_t syms[3*NCODERS]={0};
 		__m512i NW[6], N[6], W[6];
 		__m512i eW[6], ecurr[6], eNEE[6], eNEEE[6];
+#ifdef MIX5
+		__m512i cW[6];
+#endif
 		memset(NW, 0, sizeof(NW));
 		memset(N, 0, sizeof(N));
 		memset(W, 0, sizeof(W));
@@ -1173,6 +1184,9 @@ int codec_l1_avx512(int argc, char **argv)
 		memset(ecurr, 0, sizeof(ecurr));
 		memset(eNEE, 0, sizeof(eNEE));
 		memset(eNEEE, 0, sizeof(eNEEE));
+#ifdef MIX5
+		memset(cW, 0, sizeof(cW));
+#endif
 		//(__m512i*)rows[-Y]+C+(E+X*NROWS*NVAL)*NREG*NCH
 		eNEE[0]=_mm512_load_si512((__m512i*)rows[1]+0+(1+2*NROWS*NVAL)*NREG*NCH);
 		eNEE[1]=_mm512_load_si512((__m512i*)rows[1]+1+(1+2*NROWS*NVAL)*NREG*NCH);
@@ -1337,7 +1351,15 @@ int codec_l1_avx512(int argc, char **argv)
 					L1preds[3*6+3]=_mm512_load_si512((__m512i*)rows[1]+3+(0+1*NROWS*NVAL)*NREG*NCH);
 					L1preds[3*6+4]=_mm512_load_si512((__m512i*)rows[1]+4+(0+1*NROWS*NVAL)*NREG*NCH);
 					L1preds[3*6+5]=_mm512_load_si512((__m512i*)rows[1]+5+(0+1*NROWS*NVAL)*NREG*NCH);
-					
+#ifdef MIX5
+					//cW
+					L1preds[4*6+0]=cW[0];
+					L1preds[4*6+1]=cW[1];
+					L1preds[4*6+2]=cW[2];
+					L1preds[4*6+3]=cW[3];
+					L1preds[4*6+4]=cW[4];
+					L1preds[4*6+5]=cW[5];
+#endif
 
 					//mix
 					__m512i mp[12], t[12];
@@ -2864,6 +2886,14 @@ int codec_l1_avx512(int argc, char **argv)
 			eW[3]=_mm512_avg_epu16(eW[3], ecurr[3]);
 			eW[4]=_mm512_avg_epu16(eW[4], ecurr[4]);
 			eW[5]=_mm512_avg_epu16(eW[5], ecurr[5]);
+#ifdef MIX5
+			cW[0]=_mm512_sub_epi16(W[0], predYUV0[0]);
+			cW[1]=_mm512_sub_epi16(W[1], predYUV0[1]);
+			cW[2]=_mm512_sub_epi16(W[2], predYUV0[2]);
+			cW[3]=_mm512_sub_epi16(W[3], predYUV0[3]);
+			cW[4]=_mm512_sub_epi16(W[4], predYUV0[4]);
+			cW[5]=_mm512_sub_epi16(W[5], predYUV0[5]);
+#endif
 
 			_mm512_store_si512((__m512i*)rows[0]+0+(1+0*NROWS*NVAL)*NREG*NCH, eW[0]);//store current contexts
 			_mm512_store_si512((__m512i*)rows[0]+1+(1+0*NROWS*NVAL)*NREG*NCH, eW[1]);
@@ -2936,7 +2966,7 @@ int codec_l1_avx512(int argc, char **argv)
 
 		//normalize/integrate hists
 		for(int kc=0;kc<nctx;++kc)
-			enc_hist2stats(hists+(ptrdiff_t)256*kc, syminfo+(ptrdiff_t)256*kc, &bypassmask, kc, 0);
+			enc_hist2stats(hists+(ptrdiff_t)256*kc, syminfo+(ptrdiff_t)256*kc, &bypassmask, kc, 0, 0);
 			
 		if(xremw||yremh)
 		{
@@ -3332,6 +3362,7 @@ int codec_l1_avx512(int argc, char **argv)
 	(void)och_names;
 	(void)rct_names;
 	(void)print_timestamp;
+	(void)encode1d_port;
 	(void)encode1d_sse41;
 	return 0;
 }

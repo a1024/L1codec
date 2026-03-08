@@ -11,26 +11,20 @@
 #ifdef _MSC_VER
 #include<stdlib.h>
 #endif
+int codec_l1_port(int argc, char **argv);
 int codec_l1_ssse3(int argc, char **argv);
 int codec_l1_sse41(int argc, char **argv);
 int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
+	#define CODEC codec_l1_port
 //	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
-	#define CODEC codec_l1_avx2
+//	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
 
 
-#ifdef ENABLE_GUIDE
-unsigned char *g_image=0;
-double g_sqe[3]={0};
-#endif
-#ifdef ANS_VAL
-ANSVALNode *debugstack=0;
-int ansvalidx=0, ansvalmax=0;
-#endif
 int main(int argc, char **argv)
 {
 	const char *dstfn=//OVERWRITTEN
@@ -174,7 +168,7 @@ int main(int argc, char **argv)
 		argv[0],
 		srcfn,
 		tmpfn,
-		"1",
+		"0",
 	//	"3",//near
 	};
 	const char *decargs[]=
