@@ -31,7 +31,7 @@ l1c-avx2:	l1c-avx2.c
 #	clang -Wall -O2 -g -fprofile-instr-generate -fcoverage-mapping -mavx2 -mlzcnt -Dcodec_l1_avx2=main l1c-avx2.c -o l1c-avx2-prof $(LIBS)
 
 l1c-port-x64:
-	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x64
+	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port
 
 l1c-port-x86:
 	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86

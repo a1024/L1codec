@@ -1841,7 +1841,7 @@ int codec_l1_ssse3(int argc, char **argv)
 					2	3*(N-NN)+NNN
 					3	3*(W-WW)+WWW
 					4	W+NE-N
-					5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
+					5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-(NW+N))>>2
 					6	N+W-NW
 					7	N+NE-NNE
 					*/

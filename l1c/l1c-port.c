@@ -42,9 +42,9 @@ enum
 	L1_NPREDS1=5,
 	L1_NPREDS2=8,
 	L1_NPREDS3=20,
-	L1_SH1=16,	//L1SH1 <= 16
-	L1_SH2=17,	//L1SH2 >= 16
-	L1_SH3=19,	//L1SH3 >= 16
+	L1_SH1=16,
+	L1_SH2=17,
+	L1_SH3=19,
 
 	GRBITS=3,
 	NCTX=18,	//18*3+3 = 57 total
@@ -1018,7 +1018,7 @@ int codec_l1_port(int argc, char **argv)
 				int cond_cg=
 					(uint32_t)(kx-borderW)>=(uint32_t)(blockw-(borderW+borderE))||
 					(uint32_t)(ky-borderN)>=(uint32_t)(blockh-borderN);
-				int16_t vmin[3*NLANES], vmax[3*NLANES], cg[3*NLANES];
+				int16_t vmin[3*NLANES], vmax[3*NLANES], grad[3*NLANES];
 
 				for(int k=0;k<3*NLANES;++k)
 				{
@@ -1031,7 +1031,7 @@ int codec_l1_port(int argc, char **argv)
 					if(N<W)t1=N, t0=W;
 					vmin[k]=t1;
 					vmax[k]=t0;
-					pred[k]=cg[k]=N+W-rows[1][k-1*NROWS*NVAL];
+					pred[k]=grad[k]=N+W-rows[1][k-1*NROWS*NVAL];
 				}
 				if(!effort)
 					goto effort0;
@@ -1091,7 +1091,7 @@ int codec_l1_port(int argc, char **argv)
 						2	3*(N-NN)+NNN
 						3	3*(W-WW)+WWW
 						4	W+NE-N
-						5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
+						5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-(NW+N))>>2
 						6	N+W-NW
 						7	N+NE-NNE
 						*/
@@ -1107,7 +1107,8 @@ int codec_l1_port(int argc, char **argv)
 							+rows[1][k+2*NROWS*NVAL]//NEE
 							+rows[1][k+3*NROWS*NVAL]//NEEE
 							+rows[1][k+4*NROWS*NVAL]//NEEEE
-							-rows[1][k-1*NROWS*NVAL]*2//NW
+							-rows[1][k-1*NROWS*NVAL]//NW
+							-N
 						)>>2;
 						L1preds[6*3*NLANES+k]=pred[k];
 						L1preds[7*3*NLANES+k]=N+rows[1][k+1*NROWS*NVAL]-rows[2][k+1*NROWS*NVAL];
@@ -1186,7 +1187,7 @@ int codec_l1_port(int argc, char **argv)
 						L1preds[0x10*3*NLANES+k]=N+rows[1][k-1*NROWS*NVAL]-rows[2][k-1*NROWS*NVAL];
 						L1preds[0x11*3*NLANES+k]=W+rows[1][k-1*NROWS*NVAL]-rows[1][k-2*NROWS*NVAL];
 						L1preds[0x12*3*NLANES+k]=(rows[0][k-4*NROWS*NVAL]+rows[1][k+4*NROWS*NVAL])>>1;
-						L1preds[0x13*3*NLANES+k]=(rows[0][k-3*NROWS*NVAL]+rows[3][k+0*NROWS*NVAL]+rows[1][k+3*NROWS*NVAL]+rows[1][k-1*NROWS*NVAL])>>1;
+						L1preds[0x13*3*NLANES+k]=(rows[0][k-3*NROWS*NVAL]+rows[3][k+0*NROWS*NVAL]+rows[1][k+3*NROWS*NVAL]-rows[1][k-1*NROWS*NVAL])>>1;
 					}
 					for(int k=0;k<3*NLANES;++k)
 					{
@@ -1227,7 +1228,7 @@ int codec_l1_port(int argc, char **argv)
 					memcpy(pred0, pred, sizeof(pred0));
 				}
 				if(cond_cg)
-					memcpy(pred, cg, sizeof(pred0));
+					memcpy(pred, grad, sizeof(pred0));
 			effort0:
 				for(int k=0;k<3*NLANES;++k)
 					CLAMP2(pred[k], vmin[k], vmax[k]);

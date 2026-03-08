@@ -1434,7 +1434,7 @@ int codec_l1_avx2(int argc, char **argv)
 					2	3*(N-NN)+NNN
 					3	3*(W-WW)+WWW
 					4	W+NE-N
-					5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
+					5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-(NW+N))>>2
 					6	N+W-NW
 					7	N+NE-NNE
 					*/
@@ -1517,6 +1517,9 @@ int codec_l1_avx2(int argc, char **argv)
 					L1preds[7*3+0]=_mm256_srai_epi16(cache[0], 2);
 					L1preds[7*3+1]=_mm256_srai_epi16(cache[1], 2);
 					L1preds[7*3+2]=_mm256_srai_epi16(cache[2], 2);
+					//L1preds[7*3+0]=_mm256_load_si256((__m256i*)rows[1]+0+(0+2*NCH)*NROWS*NVAL);
+					//L1preds[7*3+1]=_mm256_load_si256((__m256i*)rows[1]+0+(1+2*NCH)*NROWS*NVAL);
+					//L1preds[7*3+2]=_mm256_load_si256((__m256i*)rows[1]+0+(2+2*NCH)*NROWS*NVAL);
 
 
 					//mix
