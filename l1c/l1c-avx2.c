@@ -28,7 +28,7 @@
 //	#define ANS_VAL			//DEBUG
 #endif
 
-	#define MIX5
+//	#define MIX5
 	#define ANALYSIS_GRAD
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave

@@ -28,7 +28,7 @@
 //	#define ANS_VAL			//DEBUG
 #endif
 
-	#define MIX5
+//	#define MIX5
 	#define ANALYSIS_GRAD
 //	#define USE_L2			//bad
 	#define ENABLE_RCT_EXTENSION

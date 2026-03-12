@@ -25,6 +25,7 @@
 //	#define ANS_VAL			//DEBUG
 #endif
 
+//	#define MIX5
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD
 
@@ -39,7 +40,11 @@ enum
 	ANALYSIS_YSTRIDE=4,
 
 	DEFAULT_EFFORT_LEVEL=1,
+#ifdef MIX5
 	L1_NPREDS1=5,
+#else
+	L1_NPREDS1=4,
+#endif
 	L1_NPREDS2=8,
 	L1_NPREDS3=20,
 	L1_SH1=16,
@@ -944,9 +949,12 @@ int codec_l1_port(int argc, char **argv)
 			pixels+(XPAD*NROWS+(ky-3LL+NROWS)%NROWS)*NVAL,
 		};
 		uint16_t syms[3*NLANES]={0};
-		int16_t cW[3*NLANES]={0};
 		int16_t pred[3*NLANES], pred0[3*NLANES], ctx[3*NLANES];
 		int16_t msyms[3*NLANES], moffset[2*NLANES];
+#ifdef MIX5
+		int16_t cW[3*NLANES]={0};
+#endif
+
 		for(int kx=0;kx<blockw;++kx)
 		{
 			//rows[Y][V+X*NROWS*NVAL]  add 3*NLANES for energy
@@ -1053,7 +1061,9 @@ int codec_l1_port(int argc, char **argv)
 						L1preds[1*3*NLANES+k]=pred[k];
 						L1preds[2*3*NLANES+k]=2*N-rows[2][k+0*NROWS*NVAL];
 						L1preds[3*3*NLANES+k]=rows[1][k+1*NROWS*NVAL];
+#ifdef MIX5
 						L1preds[4*3*NLANES+k]=cW[k];
+#endif
 					}
 					for(int k=0;k<3*NLANES;++k)
 					{
@@ -1062,7 +1072,9 @@ int codec_l1_port(int argc, char **argv)
 							+L1weights[1*3*NLANES+k]*L1preds[1*3*NLANES+k]
 							+L1weights[2*3*NLANES+k]*L1preds[2*3*NLANES+k]
 							+L1weights[3*3*NLANES+k]*L1preds[3*3*NLANES+k]
+#ifdef MIX5
 							+L1weights[4*3*NLANES+k]*L1preds[4*3*NLANES+k]
+#endif
 						)>>L1_SH1;
 					}
 					if(!cond_cg)//loosen pred range
@@ -1501,8 +1513,10 @@ int codec_l1_port(int argc, char **argv)
 						for(int k=0;k<3*NLANES;++k)
 							L1weights[3*NLANES*kp+k]+=msyms[k]*L1preds[3*NLANES*kp+k];
 					}
+#ifdef MIX5
 					for(int k=0;k<3*NLANES;++k)
 						cW[k]=rows[0][k+0*NROWS*NVAL]-pred0[k];
+#endif
 				}
 				else if(effort==2)//update
 				{

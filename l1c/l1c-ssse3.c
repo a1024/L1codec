@@ -34,7 +34,7 @@
 //	#define ANS_VAL			//DEBUG
 #endif
 
-	#define MIX5
+//	#define MIX5
 	#define ANALYSIS_GRAD
 	#define ENABLE_E3_CASCADE
 //	#define USE_YCBCR
