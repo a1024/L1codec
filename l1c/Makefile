@@ -34,7 +34,7 @@ l1c-port-x64:
 	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port
 
 l1c-port-x86:
-	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86
+	$(CC) $(CFLAGS) -march=pentiumpro -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86
 
 
 l1c-sse41:	l1c-sse41.c
