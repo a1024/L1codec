@@ -18,8 +18,8 @@ int codec_l1_avx2(int argc, char **argv);
 int codec_l1_avx512(int argc, char **argv);
 
 
-	#define CODEC codec_l1_port
-//	#define CODEC codec_l1_ssse3
+//	#define CODEC codec_l1_port
+	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
 //	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
@@ -79,12 +79,12 @@ int main(int argc, char **argv)
 	//	"C:/dataset-HUGE-ppm/chaos1.ppm"
 	//	"C:/dataset-HUGE-ppm/diagram.ppm"
 	//	"C:/dataset-HUGE-ppm/gaia.ppm"
-	//	"C:/dataset-HUGE-ppm/jwst.ppm"
+		"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/kodak.PPM"
 	//	"C:/dataset-HUGE-ppm/space_huge.ppm"
-		"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_02.ppm"
 	//	"C:/dataset-LPCB-ppm/fujifilm_finepix_x100_01.ppm"
 	//	"C:/dataset-LPCB-ppm/PIA13757.ppm"
@@ -168,7 +168,7 @@ int main(int argc, char **argv)
 		argv[0],
 		srcfn,
 		tmpfn,
-		"2",
+		"1",
 	//	"3",//near
 	};
 	const char *decargs[]=

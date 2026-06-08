@@ -60,7 +60,7 @@ enum
 	GRBITS=3,
 	NCTX=18,	//18*3+3 = 57 total
 
-	PROBBITS=12,	//12 bit max	James Bonfield's CDF2sym: {freq<<20 | bias<<8 | sym}
+	PROBBITS=12,	//12 bit max	CDF2sym: {freq<<20 | bias<<8 | sym}
 	RANS_STATE_BITS=31,
 	RANS_RENORM_BITS=16,
 
@@ -68,7 +68,7 @@ enum
 	NROWS=4,
 	NCH=3,
 	NVAL=2,
-	NREG=sizeof(int16_t[NCODERS])/sizeof(__m512i),
+	NREG=sizeof(int16_t[NCODERS])/(sizeof(__m512i)),
 };
 
 #define COMMON_rANS
@@ -97,14 +97,7 @@ INLINE void gather32(int *dst, const int *src, const int *offsets)
 	_mm512_store_si512((__m512i*)dst, _mm512_i32gather_epi32(_mm512_load_si512((__m512i*)offsets), src, sizeof(int)));
 #endif
 }
-INLINE void dec_yuv(
-	__m512i *mstate,
-	const __m512i *ctx0,
-	const uint32_t *CDF2syms,
-	uint8_t **pstreamptr,
-	const uint8_t *streamend,
-	__m512i *syms
-)
+INLINE void dec_yuv(__m512i *mstate, const __m512i *ctx0, const uint32_t *CDF2syms, uint8_t **pstreamptr, const uint8_t *streamend, __m512i *syms)
 {
 	const uint8_t *streamptr=*pstreamptr;
 	__m512i decctx[4];
@@ -194,10 +187,10 @@ INLINE void dec_yuv(
 		int step2=_mm_popcnt_u32(mask2);
 		int step3=_mm_popcnt_u32(mask3);
 		__m512i lo0, lo1, lo2, lo3;
-		__m256i tlo0=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=step0*sizeof(int16_t);
-		__m256i tlo1=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=step1*sizeof(int16_t);
-		__m256i tlo2=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=step2*sizeof(int16_t);
-		__m256i tlo3=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=step3*sizeof(int16_t);
+		__m256i tlo0=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=(size_t)step0*sizeof(int16_t);
+		__m256i tlo1=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=(size_t)step1*sizeof(int16_t);
+		__m256i tlo2=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=(size_t)step2*sizeof(int16_t);
+		__m256i tlo3=_mm256_loadu_si256((const __m256i*)streamptr); streamptr+=(size_t)step3*sizeof(int16_t);
 #ifdef _DEBUG
 		if(streamptr>streamend)
 			CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
@@ -223,6 +216,9 @@ INLINE void dec_yuv(
 #endif
 	}
 	*pstreamptr=(uint8_t*)(size_t)streamptr;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
 }
 
 INLINE void transpose8(__m512i *data)
@@ -744,7 +740,7 @@ int codec_l1_avx512(int argc, char **argv)
 		usize=(ptrdiff_t)3*iw*ih;
 		cap=(ptrdiff_t)4*iw*ih;
 	//	image=(uint8_t*)_mm_malloc(cap+sizeof(__m512i), 0x1000);
-		image=(uint8_t*)malloc(cap+sizeof(__m512i));
+		image=(uint8_t*)malloc((size_t)cap+sizeof(__m512i));
 		if(!image)
 		{
 			CRASH("Alloc error");
@@ -752,7 +748,7 @@ int codec_l1_avx512(int argc, char **argv)
 		}
 		if(fwd)
 		{
-			fread(image, 1, usize, fsrc);//read image
+			fread(image, 1, (size_t)usize, fsrc);//read image
 			streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
 			profile_size(streamptr, "start");
 		}
@@ -763,7 +759,7 @@ int codec_l1_avx512(int argc, char **argv)
 			csize=info.st_size;
 			streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(__m512i);
 			streamend=image+cap-sizeof(__m512i);
-			fread(streamstart, 1, csize-cheadersize, fsrc);//read stream
+			fread(streamstart, 1, (size_t)(csize-cheadersize), fsrc);//read stream
 		}
 		fclose(fsrc);
 	}
@@ -777,7 +773,7 @@ int codec_l1_avx512(int argc, char **argv)
 	int nctx=3*NCTX+3*(xremw||yremh);
 	ptrdiff_t isize=(ptrdiff_t)ixbytes*blockh;
 	ptrdiff_t interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
-	uint8_t *interleaved=(uint8_t*)_mm_malloc(interleavedsize, sizeof(__m512i));
+	uint8_t *interleaved=(uint8_t*)_mm_malloc((size_t)interleavedsize, sizeof(__m512i));
 	if(!interleaved)
 	{
 		CRASH("Alloc error");
@@ -785,15 +781,15 @@ int codec_l1_avx512(int argc, char **argv)
 	}
 	(void)xrembytes;
 	int hsize=nctx*(int)sizeof(int[256]);
-	int *hists=fwd?(int*)malloc(hsize):0;//fwd-only
+	int *hists=fwd?(int*)malloc((size_t)hsize):0;//fwd-only
 
 	int CDF2syms_size=nctx*(int)sizeof(int32_t[1<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses this as SIMD symbol info
 		CDF2syms_size=nctx*(int)sizeof(rANS_SIMD_SymInfo[256]);
-	uint32_t *CDF2syms=(uint32_t*)_mm_malloc(CDF2syms_size, sizeof(__m512i));
+	uint32_t *CDF2syms=(uint32_t*)_mm_malloc((size_t)CDF2syms_size, sizeof(__m512i));
 
 	psize=(blockw+2*XPAD)*(int)sizeof(int16_t[NCH*NROWS*NVAL*NCODERS]);//int16_t[blockw+2*XPAD][NCH*NROWS*NVAL*NCODERS]
-	pixels=(int16_t*)_mm_malloc(psize, sizeof(__m512i));
+	pixels=(int16_t*)_mm_malloc((size_t)psize, sizeof(__m512i));
 	if((fwd&&!hists)||!CDF2syms||!pixels)
 	{
 		CRASH("Alloc error");
@@ -801,7 +797,7 @@ int codec_l1_avx512(int argc, char **argv)
 	}
 	if(fwd)
 	{
-		memset(hists, 0, hsize);
+		memset(hists, 0, (size_t)hsize);
 #ifdef TEST_INTERLEAVE
 		guide_save(image, iw, ih);
 		save_ppm("20250227_1225AM_original.PPM", image, iw, ih);
@@ -1094,23 +1090,23 @@ int codec_l1_avx512(int argc, char **argv)
 	if(effort)
 	{
 		L1statesize=(int)sizeof(int[2*NCODERS*3*(L1_NPREDS3+1)]);//{preds, coeffs} * (NPREDS+{bias}) * 3 channels * NCODERS
-		L1state=(int*)_mm_malloc(L1statesize, sizeof(__m512i));
+		L1state=(int*)_mm_malloc((size_t)L1statesize, sizeof(__m512i));
 		if(!L1state)
 		{
 			CRASH("Alloc error");
 			return 1;
 		}
-		memset(L1state, 0, L1statesize);
+		memset(L1state, 0, (size_t)L1statesize);
 	}
 	const uint8_t *combination=rct_combinations[bestrct];
 	int
 		yidx=combination[II_PERM_Y]*NCODERS,
 		uidx=combination[II_PERM_U]*NCODERS,
 		vidx=combination[II_PERM_V]*NCODERS;
-	__m512i uhelpmask=_mm512_set1_epi16(-(combination[II_COEFF_U_SUB_Y]!=0));
+	__m512i uhelpmask=_mm512_set1_epi16((int16_t)-(combination[II_COEFF_U_SUB_Y]!=0));
 	__m512i vc0=_mm512_set1_epi16(combination[II_COEFF_V_SUB_Y]);
 	__m512i vc1=_mm512_set1_epi16(combination[II_COEFF_V_SUB_U]);
-	memset(pixels, 0, psize);
+	memset(pixels, 0, (size_t)psize);
 	__m512i mctxmax=_mm512_set1_epi16(NCTX-1);
 	__m512i mctxuoffset=_mm512_set1_epi16(NCTX);
 	__m512i mctxvoffset=_mm512_set1_epi16(NCTX*2);
@@ -1135,8 +1131,8 @@ int codec_l1_avx512(int argc, char **argv)
 #endif
 	if(dist>1)
 	{
-		dist_rcp=_mm512_set1_epi16(((1<<16)+dist-1)/dist);//x/dist  ->  {x*=inv; x=(x>>16)+((uint32_t)x>>31);}
-		mdist=_mm512_set1_epi16(dist);
+		dist_rcp=_mm512_set1_epi16((int16_t)(((1<<16)+dist-1)/dist));//x/dist  ->  {x*=inv; x=(x>>16)+((uint32_t)x>>31);}
+		mdist=_mm512_set1_epi16((int16_t)dist);
 	}
 	memset(myuv, 0, sizeof(myuv));
 	uint8_t *ctxptr=interleaved;
@@ -1145,7 +1141,7 @@ int codec_l1_avx512(int argc, char **argv)
 	__m512i *L1preds=effort?(__m512i*)L1state:0;
 	int *L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
 	if(effort)
-		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[3*NCODERS]), sizeof(int));
+		FILLMEM(L1weights, (1<<sh)/npreds, ((size_t)npreds+1)*sizeof(int[3*NCODERS]), sizeof(int));
 	if(!fwd)
 	{
 #ifdef _DEBUG
@@ -3248,22 +3244,22 @@ int codec_l1_avx512(int argc, char **argv)
 				return 1;
 			}
 			ptrdiff_t csize2=0;
-			csize2+=fwrite("V1", 1, 2, fdst);
-			csize2+=fwrite(&iw, 1, 3, fdst);
-			csize2+=fwrite(&ih, 1, 3, fdst);
+			csize2+=(ptrdiff_t)fwrite("V1", 1, 2, fdst);
+			csize2+=(ptrdiff_t)fwrite(&iw, 1, 3, fdst);
+			csize2+=(ptrdiff_t)fwrite(&ih, 1, 3, fdst);
 			{
 				int flags=bestrct<<2|effort;
-				csize2+=fwrite(&flags, 1, 1, fdst);
+				csize2+=(ptrdiff_t)fwrite(&flags, 1, 1, fdst);
 			}
-			csize2+=fwrite(&dist, 1, 1, fdst);
-			csize2+=fwrite(&bypassmask, 1, 8, fdst);
+			csize2+=(ptrdiff_t)fwrite(&dist, 1, 1, fdst);
+			csize2+=(ptrdiff_t)fwrite(&bypassmask, 1, 8, fdst);
 #ifdef _DEBUG
 			if(streamptr>streamstart)
 				CRASH("OOB ptr %016zX > %016zX", streamptr, streamstart);
 			if(streamptr<image)
 				CRASH("OOB ptr %016zX < %016zX", streamptr, image);
 #endif
-			csize2+=fwrite(streamptr, 1, streamstart-streamptr, fdst);
+			csize2+=(ptrdiff_t)fwrite(streamptr, 1, (size_t)(streamstart-streamptr), fdst);
 			fclose(fdst);
 			
 #ifdef ESTIMATE_SIZE

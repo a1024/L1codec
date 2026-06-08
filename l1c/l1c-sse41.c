@@ -34,7 +34,8 @@
 #endif
 
 //	#define MIX5
-	#define ANALYSIS_GRAD
+//	#define ANALYSIS_GRAD
+	#define ANALYSIS_GRID
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//2.5x faster interleave
 
@@ -44,8 +45,8 @@ enum
 	YCODERS=4,
 	NCODERS=XCODERS*YCODERS,
 
-	ANALYSIS_XSTRIDE=4,
-	ANALYSIS_YSTRIDE=4,
+	ANALYSIS_XSTRIDE=1,
+	ANALYSIS_YSTRIDE=1,
 
 	DEFAULT_EFFORT_LEVEL=1,
 #ifdef MIX5
@@ -62,7 +63,7 @@ enum
 	GRBITS=3,
 	NCTX=18,	//18*3+3 = 57 total
 
-	PROBBITS=12,	//12 bit max	James Bonfield's CDF2sym: {freq<<20 | bias<<8 | sym}
+	PROBBITS=12,	//12 bit max	CDF2sym: {freq<<20 | bias<<8 | sym}
 	RANS_STATE_BITS=31,
 	RANS_RENORM_BITS=16,
 
@@ -70,7 +71,7 @@ enum
 	NROWS=4,
 	NCH=3,
 	NVAL=2,
-	NREG=sizeof(int16_t[NCODERS])/sizeof(__m128i),
+	NREG=sizeof(int16_t[NCODERS])/(sizeof(__m128i)),
 };
 
 #define SOFT_LG2
@@ -1176,7 +1177,13 @@ int codec_l1_sse41(int argc, char **argv)
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 #else
-			for(ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
+			for(ky=
+#ifdef ANALYSIS_GRID
+				ANALYSIS_YSTRIDE
+#else
+				0
+#endif
+				;ky<blockh;ky+=ANALYSIS_YSTRIDE)//analysis
 			{
 				__m128i prev[OCH_COUNT][2];//16-bit
 				memset(prev, 0, sizeof(prev));
@@ -1193,6 +1200,23 @@ int codec_l1_sse41(int argc, char **argv)
 					r0=_mm_cvtepi8_epi16(r0);
 					g0=_mm_cvtepi8_epi16(g0);
 					b0=_mm_cvtepi8_epi16(b0);
+#ifdef ANALYSIS_GRID
+					__m128i rN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ANALYSIS_YSTRIDE*ixbytes)+0), half8);
+					__m128i gN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ANALYSIS_YSTRIDE*ixbytes)+1), half8);
+					__m128i bN0=_mm_add_epi8(_mm_load_si128((__m128i*)(imptr-ANALYSIS_YSTRIDE*ixbytes)+2), half8);
+					__m128i rN1=_mm_cvtepi8_epi16(_mm_shuffle_epi32(rN0, _MM_SHUFFLE(1, 0, 3, 2)));
+					__m128i gN1=_mm_cvtepi8_epi16(_mm_shuffle_epi32(gN0, _MM_SHUFFLE(1, 0, 3, 2)));
+					__m128i bN1=_mm_cvtepi8_epi16(_mm_shuffle_epi32(bN0, _MM_SHUFFLE(1, 0, 3, 2)));
+					rN0=_mm_cvtepi8_epi16(rN0);
+					gN0=_mm_cvtepi8_epi16(gN0);
+					bN0=_mm_cvtepi8_epi16(bN0);
+					r0=_mm_sub_epi16(r0, rN0);
+					g0=_mm_sub_epi16(g0, gN0);
+					b0=_mm_sub_epi16(b0, bN0);
+					r1=_mm_sub_epi16(r1, rN1);
+					g1=_mm_sub_epi16(g1, gN1);
+					b1=_mm_sub_epi16(b1, bN1);
+#endif
 					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
 					r0=_mm_slli_epi16(r0, 2);
 					g0=_mm_slli_epi16(g0, 2);

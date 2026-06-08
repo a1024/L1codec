@@ -8,6 +8,7 @@
 #endif
 #define _USE_MATH_DEFINES
 #include<math.h>
+#include<arm_neon.h>
 #include<sys/stat.h>
 
 
@@ -67,34 +68,27 @@ enum
 #define COMMON_rANS
 #include"common.h"
 
-INLINE void dec_yuv(
-	uint32_t *mstate,
-	const uint16_t *ctx,
-	const uint32_t *CDF2syms,
-	uint8_t **pstreamptr,
-	const uint8_t *streamend,
-	uint16_t *syms
-)
+INLINE void dec_yuv(uint32_t *mstate, const uint16_t *ctx, const uint32_t *CDF2syms, uint8_t **pstreamptr, const uint8_t *streamend, uint16_t *syms)
 {
 	const uint8_t *streamptr=*pstreamptr;
 	uint32_t decctx[NLANES];
 
-	decctx[0x0]=ctx[0x0]<<PROBBITS|(mstate[0x0]&((1<<PROBBITS)-1));
-	decctx[0x1]=ctx[0x1]<<PROBBITS|(mstate[0x1]&((1<<PROBBITS)-1));
-	decctx[0x2]=ctx[0x2]<<PROBBITS|(mstate[0x2]&((1<<PROBBITS)-1));
-	decctx[0x3]=ctx[0x3]<<PROBBITS|(mstate[0x3]&((1<<PROBBITS)-1));
-	decctx[0x4]=ctx[0x4]<<PROBBITS|(mstate[0x4]&((1<<PROBBITS)-1));
-	decctx[0x5]=ctx[0x5]<<PROBBITS|(mstate[0x5]&((1<<PROBBITS)-1));
-	decctx[0x6]=ctx[0x6]<<PROBBITS|(mstate[0x6]&((1<<PROBBITS)-1));
-	decctx[0x7]=ctx[0x7]<<PROBBITS|(mstate[0x7]&((1<<PROBBITS)-1));
-	decctx[0x8]=ctx[0x8]<<PROBBITS|(mstate[0x8]&((1<<PROBBITS)-1));
-	decctx[0x9]=ctx[0x9]<<PROBBITS|(mstate[0x9]&((1<<PROBBITS)-1));
-	decctx[0xA]=ctx[0xA]<<PROBBITS|(mstate[0xA]&((1<<PROBBITS)-1));
-	decctx[0xB]=ctx[0xB]<<PROBBITS|(mstate[0xB]&((1<<PROBBITS)-1));
-	decctx[0xC]=ctx[0xC]<<PROBBITS|(mstate[0xC]&((1<<PROBBITS)-1));
-	decctx[0xD]=ctx[0xD]<<PROBBITS|(mstate[0xD]&((1<<PROBBITS)-1));
-	decctx[0xE]=ctx[0xE]<<PROBBITS|(mstate[0xE]&((1<<PROBBITS)-1));
-	decctx[0xF]=ctx[0xF]<<PROBBITS|(mstate[0xF]&((1<<PROBBITS)-1));
+	decctx[0x0]=(uint32_t)ctx[0x0]<<PROBBITS|(mstate[0x0]&((1<<PROBBITS)-1));
+	decctx[0x1]=(uint32_t)ctx[0x1]<<PROBBITS|(mstate[0x1]&((1<<PROBBITS)-1));
+	decctx[0x2]=(uint32_t)ctx[0x2]<<PROBBITS|(mstate[0x2]&((1<<PROBBITS)-1));
+	decctx[0x3]=(uint32_t)ctx[0x3]<<PROBBITS|(mstate[0x3]&((1<<PROBBITS)-1));
+	decctx[0x4]=(uint32_t)ctx[0x4]<<PROBBITS|(mstate[0x4]&((1<<PROBBITS)-1));
+	decctx[0x5]=(uint32_t)ctx[0x5]<<PROBBITS|(mstate[0x5]&((1<<PROBBITS)-1));
+	decctx[0x6]=(uint32_t)ctx[0x6]<<PROBBITS|(mstate[0x6]&((1<<PROBBITS)-1));
+	decctx[0x7]=(uint32_t)ctx[0x7]<<PROBBITS|(mstate[0x7]&((1<<PROBBITS)-1));
+	decctx[0x8]=(uint32_t)ctx[0x8]<<PROBBITS|(mstate[0x8]&((1<<PROBBITS)-1));
+	decctx[0x9]=(uint32_t)ctx[0x9]<<PROBBITS|(mstate[0x9]&((1<<PROBBITS)-1));
+	decctx[0xA]=(uint32_t)ctx[0xA]<<PROBBITS|(mstate[0xA]&((1<<PROBBITS)-1));
+	decctx[0xB]=(uint32_t)ctx[0xB]<<PROBBITS|(mstate[0xB]&((1<<PROBBITS)-1));
+	decctx[0xC]=(uint32_t)ctx[0xC]<<PROBBITS|(mstate[0xC]&((1<<PROBBITS)-1));
+	decctx[0xD]=(uint32_t)ctx[0xD]<<PROBBITS|(mstate[0xD]&((1<<PROBBITS)-1));
+	decctx[0xE]=(uint32_t)ctx[0xE]<<PROBBITS|(mstate[0xE]&((1<<PROBBITS)-1));
+	decctx[0xF]=(uint32_t)ctx[0xF]<<PROBBITS|(mstate[0xF]&((1<<PROBBITS)-1));
 	decctx[0x0]=CDF2syms[decctx[0x0]];
 	decctx[0x1]=CDF2syms[decctx[0x1]];
 	decctx[0x2]=CDF2syms[decctx[0x2]];
@@ -174,6 +168,7 @@ INLINE void dec_yuv(
 		s2=mstate[0xF]<<16|*(uint16_t*)streamptr; p2=streamptr+sizeof(uint16_t); if(mstate[0xF]<1<<(RANS_STATE_BITS-RANS_RENORM_BITS))mstate[0xF]=s2, streamptr=p2;
 	}
 	*pstreamptr=(uint8_t*)(size_t)streamptr;
+	(void)streamend;
 }
 INLINE void transpose16(uint8_t *data)
 {
@@ -548,7 +543,7 @@ static void interleave_blocks_inv(const uint8_t *interleaved, int iw, int ih, ui
 			slowptrs0[k]+=rowstride;
 	}
 }
-int codec_l1_port(int argc, char **argv)
+int codec_l1_arm(int argc, char **argv)
 {
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
@@ -664,7 +659,7 @@ int codec_l1_port(int argc, char **argv)
 		rowstride=3*iw;
 		usize=(ptrdiff_t)3*iw*ih;
 		cap=(ptrdiff_t)4*iw*ih;
-		image=(uint8_t*)malloc(cap+sizeof(uint8_t[32]));
+		image=(uint8_t*)malloc((size_t)cap+sizeof(uint8_t[32]));
 		if(!image)
 		{
 			CRASH("Alloc error");
@@ -672,7 +667,7 @@ int codec_l1_port(int argc, char **argv)
 		}
 		if(fwd)
 		{
-			fread(image, 1, usize, fsrc);//read image
+			fread(image, 1, (size_t)usize, fsrc);//read image
 			streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
 			profile_size(streamptr, "start");
 		}
@@ -683,7 +678,7 @@ int codec_l1_port(int argc, char **argv)
 			csize=info.st_size;
 			streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(uint8_t[32]);
 			streamend=image+cap-sizeof(uint8_t[32]);
-			fread(streamstart, 1, csize-cheadersize, fsrc);//read stream
+			fread(streamstart, 1, (size_t)(csize-cheadersize), fsrc);//read stream
 		}
 		fclose(fsrc);
 	}
@@ -697,7 +692,7 @@ int codec_l1_port(int argc, char **argv)
 	int nctx=3*NCTX+3*(xremw||yremh);
 	ptrdiff_t isize=(ptrdiff_t)ixbytes*blockh;
 	ptrdiff_t interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
-	uint8_t *interleaved=(uint8_t*)malloc(interleavedsize);
+	uint8_t *interleaved=(uint8_t*)malloc((size_t)interleavedsize);
 	if(!interleaved)
 	{
 		CRASH("Alloc error");
@@ -705,18 +700,18 @@ int codec_l1_port(int argc, char **argv)
 	}
 	(void)xrembytes;
 	const int hsize=nctx*(int)sizeof(int[256]);
-	int *hists=fwd?(int*)malloc(hsize):0;//fwd-only
+	int *hists=fwd?(int*)malloc((size_t)hsize):0;//fwd-only
 
 	int CDF2syms_size=nctx*(int)sizeof(int[1<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses this as SIMD symbol info
 		CDF2syms_size=nctx*(int)sizeof(rANS_SIMD_SymInfo[256]);
-	uint32_t *CDF2syms=(uint32_t*)malloc(CDF2syms_size);
+	uint32_t *CDF2syms=(uint32_t*)malloc((size_t)CDF2syms_size);
 
 	psize=(blockw+2*XPAD)*(int)sizeof(int16_t[NROWS*NVAL]);//int16_t[blockw+2*XPAD][NROWS*NVAL]
-	pixels=(int16_t*)malloc(psize);
+	pixels=(int16_t*)malloc((size_t)psize);
 
 	int ctsize=(int)sizeof(int16_t[512<<GRBITS]);
-	int16_t *ctable=(int16_t*)malloc(ctsize);
+	int16_t *ctable=(int16_t*)malloc((size_t)ctsize);
 	if((fwd&&!hists)||!CDF2syms||!pixels||!ctable)
 	{
 		CRASH("Alloc error");
@@ -724,14 +719,14 @@ int codec_l1_port(int argc, char **argv)
 	}
 	for(int k=0;k<512<<GRBITS;++k)
 	{
-		int ctx=31-LZCNT32(k*k+1);
+		int ctx=FLOOR_LOG2(k*k+1);
 		if(ctx>NCTX-1)
 			ctx=NCTX-1;
-		ctable[k]=ctx;
+		ctable[k]=(int16_t)ctx;
 	}
 	if(fwd)
 	{
-		memset(hists, 0, hsize);
+		memset(hists, 0, (size_t)hsize);
 #ifdef TEST_INTERLEAVE
 		{
 			uint8_t x[256];
@@ -883,13 +878,13 @@ int codec_l1_port(int argc, char **argv)
 	if(effort)
 	{
 		L1statesize=(int)sizeof(int[2*NLANES*3*(L1_NPREDS3+1)]);//{preds, coeffs} * (NPREDS+{bias}) * 3 channels * NLANES
-		L1state=(int*)malloc(L1statesize);
+		L1state=(int*)malloc((size_t)L1statesize);
 		if(!L1state)
 		{
 			CRASH("Alloc error");
 			return 1;
 		}
-		memset(L1state, 0, L1statesize);
+		memset(L1state, 0, (size_t)L1statesize);
 	}
 	const uint8_t *combination=rct_combinations[bestrct];
 	int
@@ -900,7 +895,7 @@ int codec_l1_port(int argc, char **argv)
 	int vc0=combination[II_COEFF_V_SUB_Y];
 	int vc1=combination[II_COEFF_V_SUB_U];
 	//int paddedwidth=blockw+2*XPAD;
-	memset(pixels, 0, psize);
+	memset(pixels, 0, (size_t)psize);
 	int16_t myuv[3*NLANES];
 	int dist_rcp=0x10000;
 	if(dist>1)
@@ -912,7 +907,7 @@ int codec_l1_port(int argc, char **argv)
 	int16_t *L1preds=effort?(int16_t*)L1state:0;
 	int *L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NLANES*3*(L1_NPREDS3+1)):0;
 	if(effort)
-		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[6*8]), sizeof(int));
+		FILLMEM(L1weights, (1<<sh)/npreds, ((size_t)npreds+1)*sizeof(int[6*8]), sizeof(int));
 	//{
 	//	static const int weights0[]=
 	//	{
@@ -1013,7 +1008,7 @@ int codec_l1_port(int argc, char **argv)
 			{
 				uint32_t c=(uint32_t)(ctx[k]-k/NLANES*NCTX);
 				int eW=rows[0][k+0x30-1*NROWS*NVAL];
-				if(c>=NCTX||c!=31-LZCNT32(eW*eW+1))
+				if(c>=NCTX||c!=FLOOR_LOG2(eW*eW+1))
 				{
 					CRASH("");
 				}
@@ -1037,9 +1032,9 @@ int codec_l1_port(int argc, char **argv)
 					W=rows[0][k-1*NROWS*NVAL];
 					t0=N, t1=W;
 					if(N<W)t1=N, t0=W;
-					vmin[k]=t1;
-					vmax[k]=t0;
-					pred[k]=grad[k]=N+W-rows[1][k-1*NROWS*NVAL];
+					vmin[k]=(int16_t)t1;
+					vmax[k]=(int16_t)t0;
+					pred[k]=grad[k]=(int16_t)(N+W-rows[1][k-1*NROWS*NVAL]);
 				}
 				if(!effort)
 					goto effort0;
@@ -1059,7 +1054,7 @@ int codec_l1_port(int argc, char **argv)
 						*/
 						L1preds[0*3*NLANES+k]=rows[0][k-1*NROWS*NVAL];
 						L1preds[1*3*NLANES+k]=pred[k];
-						L1preds[2*3*NLANES+k]=2*N-rows[2][k+0*NROWS*NVAL];
+						L1preds[2*3*NLANES+k]=(int16_t)(2*N-rows[2][k+0*NROWS*NVAL]);
 						L1preds[3*3*NLANES+k]=rows[1][k+1*NROWS*NVAL];
 #ifdef MIX5
 						L1preds[4*3*NLANES+k]=cW[k];
@@ -1082,10 +1077,10 @@ int codec_l1_port(int argc, char **argv)
 						for(int k=0;k<3*NLANES;++k)
 						{
 							int NE=rows[1][k+1*NROWS*NVAL], NEEE=rows[1][k+3*NROWS*NVAL];
-							if(vmin[k]>NE)vmin[k]=NE;
-							if(vmax[k]<NE)vmax[k]=NE;
-							if(vmin[k]>NEEE)vmin[k]=NEEE;
-							if(vmax[k]<NEEE)vmax[k]=NEEE;
+							if(vmin[k]>NE)vmin[k]=(int16_t)NE;
+							if(vmax[k]<NE)vmax[k]=(int16_t)NE;
+							if(vmin[k]>NEEE)vmin[k]=(int16_t)NEEE;
+							if(vmax[k]<NEEE)vmax[k]=(int16_t)NEEE;
 						}
 					}
 					memcpy(pred0, pred, sizeof(pred0));
@@ -1107,12 +1102,12 @@ int codec_l1_port(int argc, char **argv)
 						6	N+W-NW
 						7	N+NE-NNE
 						*/
-						L1preds[0*3*NLANES+k]=N;
-						L1preds[1*3*NLANES+k]=W;
-						L1preds[2*3*NLANES+k]=3*(N-rows[2][k+0*NROWS*NVAL])+rows[3][k+0*NROWS*NVAL];
-						L1preds[3*3*NLANES+k]=3*(W-rows[0][k-2*NROWS*NVAL])+rows[0][k-3*NROWS*NVAL];
-						L1preds[4*3*NLANES+k]=W+rows[1][k+1*NROWS*NVAL]-N;
-						L1preds[5*3*NLANES+k]=(
+						L1preds[0*3*NLANES+k]=(int16_t)N;
+						L1preds[1*3*NLANES+k]=(int16_t)W;
+						L1preds[2*3*NLANES+k]=(int16_t)(3*(N-rows[2][k+0*NROWS*NVAL])+rows[3][k+0*NROWS*NVAL]);
+						L1preds[3*3*NLANES+k]=(int16_t)(3*(W-rows[0][k-2*NROWS*NVAL])+rows[0][k-3*NROWS*NVAL]);
+						L1preds[4*3*NLANES+k]=(int16_t)(W+rows[1][k+1*NROWS*NVAL]-N);
+						L1preds[5*3*NLANES+k]=(int16_t)((
 							+rows[0][k-4*NROWS*NVAL]//WWWW
 							+rows[0][k-3*NROWS*NVAL]//WWW
 							+rows[3][k+0*NROWS*NVAL]//NNN
@@ -1121,9 +1116,9 @@ int codec_l1_port(int argc, char **argv)
 							+rows[1][k+4*NROWS*NVAL]//NEEEE
 							-rows[1][k-1*NROWS*NVAL]//NW
 							-N
-						)>>2;
+						)>>2);
 						L1preds[6*3*NLANES+k]=pred[k];
-						L1preds[7*3*NLANES+k]=N+rows[1][k+1*NROWS*NVAL]-rows[2][k+1*NROWS*NVAL];
+						L1preds[7*3*NLANES+k]=(int16_t)(N+rows[1][k+1*NROWS*NVAL]-rows[2][k+1*NROWS*NVAL]);
 					}
 					for(int k=0;k<3*NLANES;++k)
 					{
@@ -1143,10 +1138,10 @@ int codec_l1_port(int argc, char **argv)
 						for(int k=0;k<3*NLANES;++k)
 						{
 							int NE=rows[1][k+1*NROWS*NVAL], NEEE=rows[1][k+3*NROWS*NVAL];
-							if(vmin[k]>NE)vmin[k]=NE;
-							if(vmax[k]<NE)vmax[k]=NE;
-							if(vmin[k]>NEEE)vmin[k]=NEEE;
-							if(vmax[k]<NEEE)vmax[k]=NEEE;
+							if(vmin[k]>NE)vmin[k]=(int16_t)NE;
+							if(vmax[k]<NE)vmax[k]=(int16_t)NE;
+							if(vmin[k]>NEEE)vmin[k]=(int16_t)NEEE;
+							if(vmax[k]<NEEE)vmax[k]=(int16_t)NEEE;
 						}
 					}
 					memcpy(pred0, pred, sizeof(pred0));
@@ -1181,29 +1176,29 @@ int codec_l1_port(int argc, char **argv)
 						0x13	(WWW+NNN+NEEE-NW)>>1
 						*/
 						L1preds[0x00*3*NLANES+k]=pred[k];
-						L1preds[0x01*3*NLANES+k]=N;
-						L1preds[0x02*3*NLANES+k]=W;
-						L1preds[0x03*3*NLANES+k]=W+rows[1][k+1*NROWS*NVAL]-N;
-						L1preds[0x04*3*NLANES+k]=3*(N-rows[2][k+0*NROWS*NVAL])+rows[3][k+0*NROWS*NVAL];
-						L1preds[0x05*3*NLANES+k]=3*(W-rows[0][k-2*NROWS*NVAL])+rows[0][k-3*NROWS*NVAL];
-						L1preds[0x06*3*NLANES+k]=N+rows[1][k+1*NROWS*NVAL]-rows[2][k+1*NROWS*NVAL];
+						L1preds[0x01*3*NLANES+k]=(int16_t)N;
+						L1preds[0x02*3*NLANES+k]=(int16_t)W;
+						L1preds[0x03*3*NLANES+k]=(int16_t)(W+rows[1][k+1*NROWS*NVAL]-N);
+						L1preds[0x04*3*NLANES+k]=(int16_t)(3*(N-rows[2][k+0*NROWS*NVAL])+rows[3][k+0*NROWS*NVAL]);
+						L1preds[0x05*3*NLANES+k]=(int16_t)(3*(W-rows[0][k-2*NROWS*NVAL])+rows[0][k-3*NROWS*NVAL]);
+						L1preds[0x06*3*NLANES+k]=(int16_t)(N+rows[1][k+1*NROWS*NVAL]-rows[2][k+1*NROWS*NVAL]);
 						L1preds[0x07*3*NLANES+k]=rows[1][k+2*NROWS*NVAL];
 						L1preds[0x08*3*NLANES+k]=rows[2][k+0*NROWS*NVAL];
 						L1preds[0x09*3*NLANES+k]=rows[0][k-2*NROWS*NVAL];
-						L1preds[0x0A*3*NLANES+k]=2*N-rows[2][k+0*NROWS*NVAL];
-						L1preds[0x0B*3*NLANES+k]=2*W-rows[0][k-2*NROWS*NVAL];
+						L1preds[0x0A*3*NLANES+k]=(int16_t)(2*N-rows[2][k+0*NROWS*NVAL]);
+						L1preds[0x0B*3*NLANES+k]=(int16_t)(2*W-rows[0][k-2*NROWS*NVAL]);
 						L1preds[0x0C*3*NLANES+k]=rows[1][k+3*NROWS*NVAL];
 						L1preds[0x0D*3*NLANES+k]=rows[1][k+4*NROWS*NVAL];
 						L1preds[0x0E*3*NLANES+k]=rows[2][k-2*NROWS*NVAL];
 						L1preds[0x0F*3*NLANES+k]=rows[2][k+2*NROWS*NVAL];
-						L1preds[0x10*3*NLANES+k]=N+rows[1][k-1*NROWS*NVAL]-rows[2][k-1*NROWS*NVAL];
-						L1preds[0x11*3*NLANES+k]=W+rows[1][k-1*NROWS*NVAL]-rows[1][k-2*NROWS*NVAL];
+						L1preds[0x10*3*NLANES+k]=(int16_t)(N+rows[1][k-1*NROWS*NVAL]-rows[2][k-1*NROWS*NVAL]);
+						L1preds[0x11*3*NLANES+k]=(int16_t)(W+rows[1][k-1*NROWS*NVAL]-rows[1][k-2*NROWS*NVAL]);
 						L1preds[0x12*3*NLANES+k]=(rows[0][k-4*NROWS*NVAL]+rows[1][k+4*NROWS*NVAL])>>1;
 						L1preds[0x13*3*NLANES+k]=(rows[0][k-3*NROWS*NVAL]+rows[3][k+0*NROWS*NVAL]+rows[1][k+3*NROWS*NVAL]-rows[1][k-1*NROWS*NVAL])>>1;
 					}
 					for(int k=0;k<3*NLANES;++k)
 					{
-						pred[k]=((1<<L1_SH3>>1)
+						pred[k]=(int16_t)(((1<<L1_SH3>>1)
 							+L1weights[0x00*3*NLANES+k]*L1preds[0x00*3*NLANES+k]
 							+L1weights[0x01*3*NLANES+k]*L1preds[0x01*3*NLANES+k]
 							+L1weights[0x02*3*NLANES+k]*L1preds[0x02*3*NLANES+k]
@@ -1224,17 +1219,17 @@ int codec_l1_port(int argc, char **argv)
 							+L1weights[0x11*3*NLANES+k]*L1preds[0x11*3*NLANES+k]
 							+L1weights[0x12*3*NLANES+k]*L1preds[0x12*3*NLANES+k]
 							+L1weights[0x13*3*NLANES+k]*L1preds[0x13*3*NLANES+k]
-						)>>L1_SH3;
+						)>>L1_SH3);
 					}
 					if(!cond_cg)//loosen pred range
 					{
 						for(int k=0;k<3*NLANES;++k)
 						{
 							int NE=rows[1][k+1*NROWS*NVAL], NEEE=rows[1][k+3*NROWS*NVAL];
-							if(vmin[k]>NE)vmin[k]=NE;
-							if(vmax[k]<NE)vmax[k]=NE;
-							if(vmin[k]>NEEE)vmin[k]=NEEE;
-							if(vmax[k]<NEEE)vmax[k]=NEEE;
+							if(vmin[k]>NE)vmin[k]=(int16_t)NE;
+							if(vmax[k]<NE)vmax[k]=(int16_t)NE;
+							if(vmin[k]>NEEE)vmin[k]=(int16_t)NEEE;
+							if(vmax[k]<NEEE)vmax[k]=(int16_t)NEEE;
 						}
 					}
 					memcpy(pred0, pred, sizeof(pred0));
@@ -1268,10 +1263,11 @@ int codec_l1_port(int argc, char **argv)
 						int sym, recon;
 
 						sym=msyms[k+0*NLANES];
-						msyms[k+0*NLANES]=sym=(sym*dist_rcp>>16)-(sym>>15);
+						sym=(sym*dist_rcp>>16)-(sym>>15);
+						msyms[k+0*NLANES]=(int16_t)sym;
 						recon=sym*dist+pred[k+0*NLANES];
 						CLAMP2(recon, -128, 127);
-						myuv[k+0*NLANES]=recon;
+						myuv[k+0*NLANES]=(int16_t)recon;
 #ifdef ENABLE_GUIDE
 						g_image[k+yidx]=myuv[k+0*NLANES]+128;
 						g_sqe[0]+=abs(yuv0[k]-recon);
@@ -1279,12 +1275,12 @@ int codec_l1_port(int argc, char **argv)
 					}
 				}
 				for(int k=0;k<NLANES;++k)
-					((uint16_t*)ctxptr)[k+0*NLANES]=syms[k+0*NLANES]=ctx[k+0*NLANES]<<8|(uint8_t)(msyms[k+0*NLANES]+128);
+					((uint16_t*)ctxptr)[k+0*NLANES]=syms[k+0*NLANES]=(uint16_t)(ctx[k+0*NLANES]<<8|(uint8_t)(msyms[k+0*NLANES]+128));
 
 				//decorrelate U
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+0*NLANES]=myuv[k+0*NLANES]&uhelpmask;
+					moffset[k+0*NLANES]=(int16_t)(myuv[k+0*NLANES]&uhelpmask);
 					pred[k+1*NLANES]+=moffset[k];
 					CLAMP2(pred[k+1*NLANES], -128, 127);
 					msyms[k+1*NLANES]=myuv[k+1*NLANES]-pred[k+1*NLANES];
@@ -1300,10 +1296,11 @@ int codec_l1_port(int argc, char **argv)
 						int sym, recon;
 
 						sym=msyms[k+1*NLANES];
-						msyms[k+1*NLANES]=sym=(sym*dist_rcp>>16)-(sym>>15);
+						sym=(sym*dist_rcp>>16)-(sym>>15);
+						msyms[k+1*NLANES]=(int16_t)sym;
 						recon=sym*dist+pred[k+1*NLANES];
 						CLAMP2(recon, -128, 127);
-						myuv[k+1*NLANES]=recon;
+						myuv[k+1*NLANES]=(int16_t)recon;
 #ifdef ENABLE_GUIDE
 						g_image[k+uidx]=myuv[k+1*NLANES]+128;
 						g_sqe[1]+=abs(yuv0[k]-recon);
@@ -1311,12 +1308,12 @@ int codec_l1_port(int argc, char **argv)
 					}
 				}
 				for(int k=0;k<NLANES;++k)
-					((uint16_t*)ctxptr)[k+1*NLANES]=syms[k+1*NLANES]=ctx[k+1*NLANES]<<8|(uint8_t)(msyms[k+1*NLANES]+128);
+					((uint16_t*)ctxptr)[k+1*NLANES]=syms[k+1*NLANES]=(uint16_t)(ctx[k+1*NLANES]<<8|(uint8_t)(msyms[k+1*NLANES]+128));
 				
 				//decorrelate V
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+1*NLANES]=(vc0*myuv[k+0*NLANES]+vc1*myuv[k+1*NLANES])>>2;
+					moffset[k+1*NLANES]=(int16_t)((vc0*myuv[k+0*NLANES]+vc1*myuv[k+1*NLANES])>>2);
 					pred[k+2*NLANES]+=moffset[k+1*NLANES];
 					CLAMP2(pred[k+2*NLANES], -128, 127);
 					msyms[k+2*NLANES]=myuv[k+2*NLANES]-pred[k+2*NLANES];
@@ -1332,10 +1329,11 @@ int codec_l1_port(int argc, char **argv)
 						int sym, recon;
 
 						sym=msyms[k+2*NLANES];
-						msyms[k+2*NLANES]=sym=(sym*dist_rcp>>16)-(sym>>15);
+						sym=(sym*dist_rcp>>16)-(sym>>15);
+						msyms[k+2*NLANES]=(int16_t)sym;
 						recon=sym*dist+pred[k+1*NLANES];
 						CLAMP2(recon, -128, 127);
-						myuv[k+2*NLANES]=recon;
+						myuv[k+2*NLANES]=(int16_t)recon;
 #ifdef ENABLE_GUIDE
 						g_image[k+vidx]=myuv[k+2*NLANES]+128;
 						g_sqe[2]+=abs(yuv0[k]-recon);
@@ -1343,7 +1341,7 @@ int codec_l1_port(int argc, char **argv)
 					}
 				}
 				for(int k=0;k<NLANES;++k)
-					((uint16_t*)ctxptr)[k+2*NLANES]=syms[k+2*NLANES]=ctx[k+2*NLANES]<<8|(uint8_t)(msyms[k+2*NLANES]+128);
+					((uint16_t*)ctxptr)[k+2*NLANES]=syms[k+2*NLANES]=(uint16_t)(ctx[k+2*NLANES]<<8|(uint8_t)(msyms[k+2*NLANES]+128));
 				{
 					int *pa, *pb, *pc, va, vb, vc;
 					pa=hists+syms[0*NLANES+0x0]; pb=hists+syms[1*NLANES+0x0]; pc=hists+syms[2*NLANES+0x0]; va=*pa+1; vb=*pb+1; vc=*pc+1; *pa=va; *pb=vb; *pc=vc;
@@ -1381,7 +1379,7 @@ int codec_l1_port(int argc, char **argv)
 					{
 						int p=(myuv[k+0*NLANES]-128)*dist+pred[k+0*NLANES];
 						CLAMP2(p, -128, 127);
-						myuv[k+0*NLANES]=p;
+						myuv[k+0*NLANES]=(int16_t)p;
 					}
 				}
 				else
@@ -1390,7 +1388,7 @@ int codec_l1_port(int argc, char **argv)
 						myuv[k+0*NLANES]=(uint8_t)(myuv[k+0*NLANES]+pred[k+0*NLANES])-128;
 				}
 				for(int k=0;k<NLANES;++k)
-					imptr[k+yidx]=myuv[k+0*NLANES]+128;
+					imptr[k+yidx]=(uint8_t)(myuv[k+0*NLANES]+128);
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+yidx, g_image+(imptr-interleaved)+yidx, NLANES))
 				{
@@ -1408,7 +1406,7 @@ int codec_l1_port(int argc, char **argv)
 				//reconstruct U
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+0*NLANES]=myuv[k+0*NLANES]&uhelpmask;
+					moffset[k+0*NLANES]=(int16_t)(myuv[k+0*NLANES]&uhelpmask);
 					pred[k+1*NLANES]+=moffset[k+0*NLANES];
 					CLAMP2(pred[k+1*NLANES], -128, 127);
 				}
@@ -1418,7 +1416,7 @@ int codec_l1_port(int argc, char **argv)
 					{
 						int p=(myuv[k+1*NLANES]-128)*dist+pred[k+1*NLANES];
 						CLAMP2(p, -128, 127);
-						myuv[k+1*NLANES]=p;
+						myuv[k+1*NLANES]=(int16_t)p;
 					}
 				}
 				else
@@ -1427,7 +1425,7 @@ int codec_l1_port(int argc, char **argv)
 						myuv[k+1*NLANES]=(uint8_t)(myuv[k+1*NLANES]+pred[k+1*NLANES])-128;
 				}
 				for(int k=0;k<NLANES;++k)
-					imptr[k+uidx]=myuv[k+1*NLANES]+128;
+					imptr[k+uidx]=(uint8_t)(myuv[k+1*NLANES]+128);
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+uidx, g_image+(imptr-interleaved)+uidx, NLANES))
 				{
@@ -1445,7 +1443,7 @@ int codec_l1_port(int argc, char **argv)
 				//reconstruct V
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+1*NLANES]=(vc0*myuv[k+0*NLANES]+vc1*myuv[k+1*NLANES])>>2;
+					moffset[k+1*NLANES]=(int16_t)((vc0*myuv[k+0*NLANES]+vc1*myuv[k+1*NLANES])>>2);
 					pred[k+2*NLANES]+=moffset[k+1*NLANES];
 					CLAMP2(pred[k+2*NLANES], -128, 127);
 				}
@@ -1455,7 +1453,7 @@ int codec_l1_port(int argc, char **argv)
 					{
 						int p=(myuv[k+2*NLANES]-128)*dist+pred[k+2*NLANES];
 						CLAMP2(p, -128, 127);
-						myuv[k+2*NLANES]=p;
+						myuv[k+2*NLANES]=(int16_t)p;
 					}
 				}
 				else
@@ -1464,7 +1462,7 @@ int codec_l1_port(int argc, char **argv)
 						myuv[k+2*NLANES]=(uint8_t)(myuv[k+2*NLANES]+pred[k+2*NLANES])-128;
 				}
 				for(int k=0;k<NLANES;++k)
-					imptr[k+vidx]=myuv[k+2*NLANES]+128;
+					imptr[k+vidx]=(uint8_t)(myuv[k+2*NLANES]+128);
 #ifdef ENABLE_GUIDE
 				if(memcmp(imptr+vidx, g_image+(imptr-interleaved)+vidx, NLANES))
 				{
@@ -1492,9 +1490,9 @@ int codec_l1_port(int argc, char **argv)
 				s0=(((s0<<1^s0>>31)<<GRBITS)+(rows[1][k+2*NROWS*NVAL+3*NLANES]>rows[1][k+3*NROWS*NVAL+3*NLANES]?rows[1][k+2*NROWS*NVAL+3*NLANES]:rows[1][k+3*NROWS*NVAL+3*NLANES])+1)>>1;
 				s1=(((s1<<1^s1>>31)<<GRBITS)+(rows[1][k+2*NROWS*NVAL+4*NLANES]>rows[1][k+3*NROWS*NVAL+4*NLANES]?rows[1][k+2*NROWS*NVAL+4*NLANES]:rows[1][k+3*NROWS*NVAL+4*NLANES])+1)>>1;
 				s2=(((s2<<1^s2>>31)<<GRBITS)+(rows[1][k+2*NROWS*NVAL+5*NLANES]>rows[1][k+3*NROWS*NVAL+5*NLANES]?rows[1][k+2*NROWS*NVAL+5*NLANES]:rows[1][k+3*NROWS*NVAL+5*NLANES])+1)>>1;
-				rows[0][k+0*NROWS*NVAL+3*NLANES]=(rows[0][k-1*NROWS*NVAL+3*NLANES]+s0+1)>>1;
-				rows[0][k+0*NROWS*NVAL+4*NLANES]=(rows[0][k-1*NROWS*NVAL+4*NLANES]+s1+1)>>1;
-				rows[0][k+0*NROWS*NVAL+5*NLANES]=(rows[0][k-1*NROWS*NVAL+5*NLANES]+s2+1)>>1;
+				rows[0][k+0*NROWS*NVAL+3*NLANES]=(int16_t)((rows[0][k-1*NROWS*NVAL+3*NLANES]+s0+1)>>1);
+				rows[0][k+0*NROWS*NVAL+4*NLANES]=(int16_t)((rows[0][k-1*NROWS*NVAL+4*NLANES]+s1+1)>>1);
+				rows[0][k+0*NROWS*NVAL+5*NLANES]=(int16_t)((rows[0][k-1*NROWS*NVAL+5*NLANES]+s2+1)>>1);
 			}
 			if(effort)
 			{
@@ -1733,7 +1731,7 @@ int codec_l1_port(int argc, char **argv)
 			if(streamptr<image)
 				CRASH("OOB ptr %016zX < %016zX", streamptr, image);
 #endif
-			csize2+=fwrite(streamptr, 1, streamstart-streamptr, fdst);
+			csize2+=fwrite(streamptr, 1, (size_t)(streamstart-streamptr), fdst);
 			fclose(fdst);
 			
 #ifdef ESTIMATE_SIZE

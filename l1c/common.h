@@ -3,6 +3,7 @@
 #ifndef INC_COMMON_H
 #define INC_COMMON_H
 #include<stdint.h>
+#include<inttypes.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -14,7 +15,6 @@
 #endif
 
 
-//macros
 #ifdef _MSC_VER
 #	define ALIGN(N) __declspec(align(N))
 #	define INLINE __forceinline static
@@ -29,46 +29,20 @@
 #	endif
 #endif
 
-#define CLAMP2(X, LO, HI)\
-	do\
-	{\
-		if((X)<(LO))X=LO;\
-		if((X)>(HI))X=HI;\
-	}while(0)
+#define CLAMP2(X, L, H) X=X<(L)?L:X, X=X>(H)?H:X
 
-#if defined SOFT_LG2 //defined _M_X64 || defined __x86_64__
-INLINE int floor_log2_64(uint64_t n)
-{
-	int logn, sh;
-
-	logn=-!n;
-	sh=(n>=1ULL<<32)<<5;	logn+=sh, n>>=sh;
-	sh=(n>=1   <<16)<<4;	logn+=sh, n>>=sh;
-	sh=(n>=1   << 8)<<3;	logn+=sh, n>>=sh;
-	sh=(n>=1   << 4)<<2;	logn+=sh, n>>=sh;
-	sh=(n>=1   << 2)<<1;	logn+=sh, n>>=sh;
-	sh= n>=1   << 1;	logn+=sh;
-	return logn;
-}
-INLINE int floor_log2_32(uint32_t n)
-{
-	int logn, sh;
-
-	logn=-!n;
-	sh=(n>=1<<16)<<4;	logn+=sh, n>>=sh;
-	sh=(n>=1<< 8)<<3;	logn+=sh, n>>=sh;
-	sh=(n>=1<< 4)<<2;	logn+=sh, n>>=sh;
-	sh=(n>=1<< 2)<<1;	logn+=sh, n>>=sh;
-	sh= n>=1<< 1;		logn+=sh;
-	return logn;
-}
-#define FLOOR_LOG2(X) (sizeof(X)==8?floor_log2_64(X):floor_log2_32((uint32_t)(X)))
+#if defined _M_X64 || defined __x86_64__
+#define LZCNT32 _lzcnt_u32
+#define LZCNT64 _lzcnt_u64
+#define TZCNT32 _tzcnt_u32
+#define TZCNT64 _tzcnt_u64
 #else
-#define FLOOR_LOG2(X) (sizeof(X)==8?63-(int32_t)_lzcnt_u64(X):31-_lzcnt_u32((uint32_t)(X)))
+#define LZCNT32 __builtin_clz
+#define LZCNT64 __builtin_clzll
+#define TZCNT32 __builtin_ctz
+#define TZCNT64 __builtin_ctzll
 #endif
 
-
-//runtime
 static void crash(const char *file, int line, const char *format, ...)
 {
 	printf("%s(%d):\n", file, line);
@@ -133,7 +107,7 @@ static double time_sec(void)
 #else
 	struct timespec t;
 	clock_gettime(CLOCK_REALTIME, &t);//<time.h>
-	return t.tv_sec+t.tv_nsec*1e-9;
+	return (double)t.tv_sec+(double)t.tv_nsec*1e-9;
 #endif
 }
 static int print_timestamp(const char *format)//"%Y-%m-%d_%H%M%S"
@@ -146,7 +120,7 @@ static int print_timestamp(const char *format)//"%Y-%m-%d_%H%M%S"
 static void colorgen(int *colors, int count, int minbrightness, int maxbrightness, int maxtrials)
 {
 	int brightnessrange=0, dmax0=0, k;
-	static const char increments[]=
+	static const int8_t increments[]=
 	{
 		//r, g, b
 		+1, -1, +0,
@@ -157,7 +131,7 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 		+0, -1, +1,
 	};
 
-	unsigned char *data=(unsigned char*)colors;
+	uint8_t *data=(uint8_t*)colors;
 	CLAMP2(minbrightness, 0, 765-1);
 	if(maxbrightness<minbrightness+1)
 		maxbrightness=minbrightness+1;
@@ -190,8 +164,8 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 				t0=rand();
 				while(t0)
 				{
-					const char *inc;
-					int rem=t0;
+					const int8_t *inc;
+					rem=t0;
 					t0/=6;
 					rem-=t0*6;
 					inc=increments+rem*3;
@@ -207,7 +181,7 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 			dmin=0xFFFFFF;// > 3*255*255
 			{
 				int k2;
-				const unsigned char *p2=(const unsigned char*)data;
+				const uint8_t *p2=(const uint8_t*)data;
 				for(k2=0;k2<k;++k2)
 				{
 					int dr=p2[0]-r;
@@ -224,7 +198,7 @@ static void colorgen(int *colors, int count, int minbrightness, int maxbrightnes
 				bestdist=dmin;
 				bestcolor=b<<16|g<<8|r;
 			}
-			reject=((unsigned long long)dmin<<21)<(unsigned long long)rem*dmax0;
+			reject=((uint64_t)dmin<<21)<(uint64_t)rem*(uint64_t)dmax0;
 			if(ntrials>=maxtrials)
 				bestcolor=0x808080;
 			//	CRASH("%d trials reached, bestcolor %08X", maxtrials, bestcolor);
@@ -242,15 +216,15 @@ static int colorprintf(int textcolor, int bkcolor, const char *format, ...)//0x0
 	va_list args;
 	char buf[2048];
 
-	printed+=snprintf(buf+printed, sizeof(buf)-1-printed, "\33[48;2;%d;%d;%d;38;2;%d;%d;%dm",
+	printed+=snprintf(buf+printed, sizeof(buf)-1-(size_t)printed, "\33[48;2;%d;%d;%d;38;2;%d;%d;%dm",
 		bkcolor&255, bkcolor>>8&255, bkcolor>>16&255,
 		textcolor&255, textcolor>>8&255, textcolor>>16&255
 	);
 	va_start(args, format);
-	msg=vsnprintf(buf+printed, sizeof(buf)-1-printed, format, args);
+	msg=vsnprintf(buf+printed, sizeof(buf)-1-(size_t)printed, format, args);
 	printed+=msg;
 	va_end(args);
-	printed+=snprintf(buf+printed, sizeof(buf)-1-printed, "\33[0m");
+	printed+=snprintf(buf+printed, sizeof(buf)-1-(size_t)printed, "\33[0m");
 
 	printf("%s", buf);
 
@@ -261,14 +235,14 @@ static int colorprintf(int textcolor, int bkcolor, const char *format, ...)//0x0
 //application-specific
 #ifdef ENABLE_GUIDE
 static int g_iw=0, g_ih=0;
-static unsigned char *g_image=0;
+static uint8_t *g_image=0;
 static double g_sqe[3]={0};
-static void guide_save(const unsigned char *image, int iw, int ih)
+static void guide_save(const uint8_t *image, int iw, int ih)
 {
 	int size=3*iw*ih;
 	g_iw=iw;
 	g_ih=ih;
-	g_image=(unsigned char*)malloc(size);
+	g_image=(uint8_t*)malloc(size);
 	if(!g_image)
 	{
 		CRASH("Alloc error");
@@ -276,7 +250,7 @@ static void guide_save(const unsigned char *image, int iw, int ih)
 	}
 	memcpy(g_image, image, size);
 }
-static void guide_check(const unsigned char *image, int kx, int ky)
+static void guide_check(const uint8_t *image, int kx, int ky)
 {
 	int idx=3*(g_iw*ky+kx);
 	if(memcmp(image+idx, g_image+idx, 3))
@@ -291,10 +265,10 @@ static void guide_check(const unsigned char *image, int kx, int ky)
 #endif
 
 #ifdef PROFILE_SIZE
-static void profile_size(const unsigned char *dstbwdptr, const char *msg, ...)
+static void profile_size(const uint8_t *dstbwdptr, const char *msg, ...)
 {
 	static ptrdiff_t size=0;
-	static const unsigned char *prev=0;
+	static const uint8_t *prev=0;
 	if(prev)
 	{
 		ptrdiff_t diff=prev-dstbwdptr;
@@ -361,7 +335,9 @@ static void prof_print(ptrdiff_t usize)
 		if(tmax<t)
 			tmax=t;
 	}
+#if defined __x86_64__ || defined __amd64__ || defined _M_X64 //|| defined __i386__ || defined _M_IX86
 	srand((unsigned)__rdtsc());
+#endif
 	colorgen(colors, prof_count, 64, 300, 100);
 	printf("1 char = %d ms\n", scale);
 	//{
@@ -391,19 +367,19 @@ static void prof_print(ptrdiff_t usize)
 			int labelstart=(space-len)>>1;
 			int labelend=labelstart+len;
 
-			memset(buf, '-', labelstart);
+			memset(buf, '-', (size_t)labelstart);
 			buf[labelstart]=0;
 			//printf("%s%s", buf, info->msg);
 			colorprintf(colors[k], colors[k], buf);
 			colorprintf(COLORPRINTF_TXT_DEFAULT, colors[k], "%s", info->msg);
-			memset(buf, '-', (ptrdiff_t)space-labelend);
+			memset(buf, '-', (size_t)space-labelend);
 			buf[space-labelend]=0;
 			//printf("%s", buf);
 			colorprintf(colors[k], colors[k], buf);
 		}
 		else
 		{
-			memset(buf, '-', space);
+			memset(buf, '-', (size_t)space);
 			buf[space]=0;
 			//printf("%s", buf);
 			colorprintf(colors[k], colors[k], buf);
@@ -416,12 +392,12 @@ static void prof_print(ptrdiff_t usize)
 	for(k=0;k<prof_count;++k)
 	{
 		SpeedProfilerInfo *info=prof_data+k;
-		printf("%16.7lf ms %8.4lf%% ", info->t*1000, 100.*info->t/timesum);
+		printf("%13.4lf ms %8.4lf%% ", info->t*1000, 100.*info->t/timesum);
 		if(info->size)
-			printf(" %16.6lf MB/s %16.6lf ms/MB %10lld bytes "
-				, info->size/(info->t*1024*1024)
-				, info->t*1024*1024*1000/info->size
-				, (uint64_t)info->size
+			printf(" %16.6lf MB/s %16.6lf ms/MB %10" PRIi64 " bytes "
+				, (double)info->size/(info->t*1024*1024)
+				, info->t*1024*1024*1000/(double)info->size
+				, (int64_t)info->size
 			);
 		//if(info->msg)
 		//	printf("%s", info->msg);
@@ -434,7 +410,7 @@ static void prof_print(ptrdiff_t usize)
 		printf("\n");
 	}
 	printf("\n");
-	printf("%16.7lf ms %12.6lf MB/s Total\n", timesum*1000, usize/(timesum*1024*1024));
+	printf("%16.7lf ms %12.6lf MB/s Total\n", timesum*1000, (double)usize/(timesum*1024*1024));
 	printf("\n");
 	prof_count=0;
 	prof_timestamp=0;
@@ -632,7 +608,7 @@ typedef enum _RCTIndex
 #undef  RCT
 	RCT_COUNT,
 } RCTIndex;
-static const unsigned char rct_combinations[RCT_COUNT][II_COUNT]=
+static const uint8_t rct_combinations[RCT_COUNT][II_COUNT]=
 {
 #define RCT(LABEL, ...) {__VA_ARGS__},
 	RCTLIST
@@ -654,7 +630,7 @@ typedef struct _ANSVALHeader
 	unsigned short esize, count;
 	unsigned idx;
 	struct _ANSVALHeader *above, *below;
-	unsigned char data[];
+	uint8_t data[];
 } ANSVALNode;
 static ANSVALNode *debugstack=0;
 static int ansvalidx=0, ansvalmax=0;
@@ -681,7 +657,7 @@ static void ansval_push(const void *data, int esize, int count)
 }
 static void ansval_printr(const void *data, int esize, int count, const void *xdata)//print elements in reverse because little-endian
 {
-	const unsigned char *p=(const unsigned char*)data, *p2=(const unsigned char*)xdata;
+	const uint8_t *p=(const uint8_t*)data, *p2=(const uint8_t*)xdata;
 	int size=count*esize, k;
 	for(k=0;k<size;k+=esize)
 	{
@@ -817,7 +793,7 @@ INLINE void bitpacker_dec_init(BitPackerLIFO *ec, const uint8_t *bufptr0_start, 
 	ec->srcfwdptr=bufptr0_start+8;
 	ec->streamend=bufend;
 	ec->state=*(const uint64_t*)bufptr0_start;
-	ec->dec_navailable=FLOOR_LOG2(ec->state)+1;
+	ec->dec_navailable=63-(int)LZCNT64(ec->state)+1;
 }
 INLINE void bitpacker_enc_flush(BitPackerLIFO *ec)
 {
@@ -850,7 +826,7 @@ INLINE void bitpacker_enc(BitPackerLIFO *ec, int inbits, int sym)
 		ansval_push(&ec->state, sizeof(ec->state), 1);
 #endif
 	}
-	ec->state=ec->state<<inbits|sym;
+	ec->state=ec->state<<inbits|(uint64_t)sym;
 #ifdef ANS_VAL
 	ansval_push(&inbits, sizeof(inbits), 1);
 	ansval_push(&ec->state, sizeof(ec->state), 1);
@@ -864,7 +840,7 @@ INLINE int bitpacker_dec(BitPackerLIFO *ec, int outbits)
 	if(outbits>BITPACKERMAX)
 		CRASH("BitPacker outbits %d", outbits);
 #endif
-	sym=ec->state&((1ULL<<outbits)-1);
+	sym=(int)(ec->state&((1ULL<<outbits)-1));
 
 	//pop outbits then renorm
 #ifdef ANS_VAL
@@ -944,7 +920,7 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 		for(ks=0, ks2=0, sum2=0;ks<256;++ks)//absent symbols get zero freqs
 		{
 			int freq=hist[ks];
-			hist[ks]=(int)(sum2*((1ULL<<PROBBITS)-count)/sum)+ks2;
+			hist[ks]=(int)((uint64_t)sum2*((1ULL<<PROBBITS)-(uint64_t)count)/(uint64_t)sum)+ks2;
 			ks2+=freq!=0;
 			sum2+=freq;
 		}
@@ -1042,9 +1018,9 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 			int freq=next-curr;
 			next=curr;
 			hist[ks]=freq;
-			info->smax=(freq<<(RANS_STATE_BITS-PROBBITS))-1;//rescale freq to match the rANS state, and decrement to use _mm_cmpgt_epi32 instead of '>='
-			info->cdf=curr;
-			info->negf=(1<<PROBBITS)-freq;
+			info->smax=(uint32_t)((freq<<(RANS_STATE_BITS-PROBBITS))-1);//rescale freq to match the rANS state, and decrement to use _mm_cmpgt_epi32 instead of '>='
+			info->cdf=(uint32_t)curr;
+			info->negf=(uint16_t)((1<<PROBBITS)-freq);
 			//encoding:  state  =  q<<16|(cdf+r)
 			//div-free:  state  =  q*M+cdf+state-q*freq  =  state+q*(M-freq)+cdf  =  state+(state*invf>>sh)*(M-freq)+cdf
 			//sh = FLOOR_LOG2(freq)+32
@@ -1065,8 +1041,8 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 			{
 				uint64_t inv;
 
-				info->sh=FLOOR_LOG2(freq);//eg: x/2 = x*0x80000000>>32>>0
-				inv=((0x100000000ULL<<info->sh)+freq-1)/freq;
+				info->sh=(uint16_t)(31-LZCNT32(freq));//eg: x/2 = x*0x80000000>>32>>0
+				inv=((0x100000000ULL<<info->sh)+(uint64_t)freq-1)/(uint64_t)freq;
 				info->invf=(uint32_t)inv;
 				if(inv>0xFFFFFFFF)
 				{
@@ -1081,7 +1057,7 @@ static void enc_hist2stats(int *hist, rANS_SIMD_SymInfo *syminfo, uint64_t *bypa
 				maxsh=info->sh;
 #endif
 			if(sse41)
-				info->sh=1<<(PROBBITS-1-info->sh);
+				info->sh=(uint16_t)(1<<(PROBBITS-1-info->sh));
 			else if(oneshift)
 				info->sh+=32;
 		}
@@ -1100,7 +1076,7 @@ static void enc_packhist(BitPackerLIFO *ec, const int *hist, uint64_t bypassmask
 		{
 			int sym=((ks>>1^-(ks&1))+128)&255;
 			int freq=hist[sym];
-			CDF[ks]=sum;//separate buffer for faster access in 2nd loop
+			CDF[ks]=(uint16_t)sum;//separate buffer for faster access in 2nd loop
 			sum+=freq;
 		}
 		CDF[256]=1<<PROBBITS;
@@ -1112,12 +1088,12 @@ static void enc_packhist(BitPackerLIFO *ec, const int *hist, uint64_t bypassmask
 		for(ks=1;ks<=256;++ks)//push GR.k
 		{
 			int next=CDF[ks], freq=next-cdfW;
-			int nbypass=FLOOR_LOG2(CDFlevels);
+			int nbypass=31-LZCNT32(CDFlevels);
 			if(ks>1)
 				nbypass-=7;
 			if(nbypass<0)
 				nbypass=0;
-			CDF[ks]=nbypass<<PROBBITS|freq;
+			CDF[ks]=(uint16_t)(nbypass<<PROBBITS|freq);
 			cdfW=next;
 			CDFlevels-=freq;
 			startsym=ks;
@@ -1169,7 +1145,7 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 			int freq, nbypass, ks2, bit;
 
 			freq=-1;//stop bit doesn't count
-			nbypass=FLOOR_LOG2(CDFlevels);
+			nbypass=31-LZCNT32(CDFlevels);
 			ks2=ks+1;
 			if(ks2>1)
 				nbypass-=7;
@@ -1190,7 +1166,7 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 			ansval_check(&freq, sizeof(freq), 1);
 #endif
 
-			CDF[ks]=freq;
+			CDF[ks]=(uint16_t)freq;
 			CDFlevels-=freq;
 			if(CDFlevels<=0)
 			{
@@ -1214,7 +1190,7 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 		for(ks=0;ks<256;++ks)//integrate
 		{
 			int freq=hist[ks];
-			hist[ks]=sum;
+			hist[ks]=(uint16_t)sum;
 			sum+=freq;
 		}
 	}
@@ -1281,6 +1257,7 @@ static void decorr1d(uint8_t *data, int count, int bytestride, int bestrct, int 
 		int u=ptr[uidx]-128;
 		int v=ptr[vidx]-128;
 		int sym;
+
 		ptr[0]=sym=(uint8_t)(y-prevy+128);
 		++rhist[256*0+sym];
 		prevy=y;
@@ -1308,6 +1285,7 @@ static void encode1d_port(uint8_t *data, int count, int bytestride, unsigned *ps
 	uint8_t *ptr=data+(count-(ptrdiff_t)1)*bytestride;
 	const rANS_SIMD_SymInfo *info=0;
 	int k;
+
 	for(k=0;k<count;++k)
 	{
 		info=rsyminfo+ptr[2]+256*2;
@@ -1362,6 +1340,9 @@ static void encode1d_port(uint8_t *data, int count, int bytestride, unsigned *ps
 	}
 	*pstreamptr=streamptr;
 	*pstate=state;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
 }
 static void encode1d_sse41(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
 {
@@ -1425,6 +1406,9 @@ static void encode1d_sse41(uint8_t *data, int count, int bytestride, unsigned *p
 	}
 	*pstreamptr=streamptr;
 	*pstate=state;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
 }
 static void encode1d(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
 {
@@ -1487,6 +1471,9 @@ static void encode1d(uint8_t *data, int count, int bytestride, unsigned *pstate,
 	}
 	*pstreamptr=streamptr;
 	*pstate=state;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
 }
 static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsigned *pstate, const uint8_t **pstreamptr, const uint8_t *streamend, unsigned *rCDF2syms)
 {
@@ -1508,9 +1495,9 @@ static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsi
 	{
 		unsigned info;
 
-		//yuv = (char)(error+N-128)
+		//yuv = (int8_t)(error+N-128)
 		info=rCDF2syms[0<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		y=(char)(info+prevy-128);
+		y=(int8_t)(info+prevy-128);
 		prevy=y;
 #ifdef ANS_VAL
 		ansval_check(&state, sizeof(state), 1);
@@ -1530,7 +1517,7 @@ static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsi
 		prevu+=offset;
 		CLAMP2(prevu, -128, 127);
 		info=rCDF2syms[1<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		u=(char)(info+prevu-128);
+		u=(int8_t)(info+prevu-128);
 		prevu=u-offset;
 #ifdef ANS_VAL
 		ansval_check(&state, sizeof(state), 1);
@@ -1550,7 +1537,7 @@ static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsi
 		vpred=(prevv+offset)>>2;
 		CLAMP2(vpred, -128, 127);
 		info=rCDF2syms[2<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		v=(char)(info+vpred-128);
+		v=(int8_t)(info+vpred-128);
 		prevv=4*v-offset;
 #ifdef ANS_VAL
 		ansval_check(&state, sizeof(state), 1);
@@ -1572,6 +1559,9 @@ static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsi
 	}
 	*pstreamptr=streamptr;
 	*pstate=state;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
 }
 #endif
 
