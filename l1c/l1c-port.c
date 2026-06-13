@@ -1733,7 +1733,9 @@ int codec_l1_port(int argc, char **argv)
 			if(streamptr<image)
 				CRASH("OOB ptr %016zX < %016zX", streamptr, image);
 #endif
-			csize2+=fwrite(streamptr, 1, streamstart-streamptr, fdst);
+			acme_write(fdst, streamptr, streamstart-streamptr);
+			csize2+=streamstart-streamptr;
+		//	csize2+=fwrite(streamptr, 1, streamstart-streamptr, fdst);
 			fclose(fdst);
 			
 #ifdef ESTIMATE_SIZE

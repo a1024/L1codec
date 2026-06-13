@@ -36,7 +36,7 @@ l1c-port-x64:
 	$(CC) $(CFLAGS) -Dcodec_l1_port=main l1c-port.c -o l1c-port-x64
 
 l1c-port-x86:
-	$(CC) $(CFLAGS) -m32 -march=pentiumpro -fno-vectorize -fno-slp-vectorize -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86
+	gcc $(CFLAGS) -m32 -march=pentiumpro -Dcodec_l1_port=main l1c-port.c -o l1c-port-x86
 
 l1c-sse41-x64:	l1c-sse41.c
 	$(CC) $(CFLAGS) -msse4.1 -Dcodec_l1_sse41=main l1c-sse41.c -o l1c-sse41-x64 $(LIBS)

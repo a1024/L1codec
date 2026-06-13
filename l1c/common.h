@@ -91,6 +91,23 @@ static void memfill(void *dst, const void *src, size_t dstbytes, size_t srcbytes
 		*(PTR)=(DATA);\
 		memfill((PTR)+1, PTR, (ASIZE)-(ESIZE), ESIZE);\
 	}while(0)
+static void acme_write(FILE *f, const uint8_t *buf, size_t size)
+{
+	enum
+	{
+		CHUNKSIZE=2<<20,
+	};
+	const uint8_t *ptr=buf, *end=buf+size;
+
+	while(ptr<end)
+	{
+		size_t delta=end-ptr;
+		if(delta>CHUNKSIZE)
+			delta=CHUNKSIZE;
+		fwrite(ptr, 1, delta, f);
+		ptr+=delta;
+	}
+}
 static double time_sec(void)
 {
 #if defined _WIN32 || defined WIN32
@@ -1235,7 +1252,8 @@ static void save_ppm(const char *fn, const uint8_t *image, int iw, int ih)
 		return;
 	}
 	fprintf(fdst, "P6\n%d %d\n255\n", iw, ih);
-	fwrite(image, 1, (ptrdiff_t)3*iw*ih, fdst);
+	acme_write(fdst, image, (ptrdiff_t)3*iw*ih);
+//	fwrite(image, 1, (ptrdiff_t)3*iw*ih, fdst);
 	fclose(fdst);
 }
 static void decorr1d(uint8_t *data, int count, int bytestride, int bestrct, int *rhist)

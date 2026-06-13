@@ -3259,7 +3259,9 @@ int codec_l1_avx512(int argc, char **argv)
 			if(streamptr<image)
 				CRASH("OOB ptr %016zX < %016zX", streamptr, image);
 #endif
-			csize2+=(ptrdiff_t)fwrite(streamptr, 1, (size_t)(streamstart-streamptr), fdst);
+			acme_write(fdst, streamptr, streamstart-streamptr);
+			csize2+=streamstart-streamptr;
+		//	csize2+=(ptrdiff_t)fwrite(streamptr, 1, (size_t)(streamstart-streamptr), fdst);
 			fclose(fdst);
 			
 #ifdef ESTIMATE_SIZE
