@@ -29,7 +29,7 @@
 #endif
 
 //	#define MIX5
-	#define ANALYSIS_GRAD
+//	#define ANALYSIS_GRAD
 //	#define USE_L2			//bad
 	#define ENABLE_RCT_EXTENSION
 	#define INTERLEAVESIMD		//tailored for 64 lanes		2.5x faster interleave
@@ -42,8 +42,8 @@ enum
 	YCODERS=8,
 	NCODERS=XCODERS*YCODERS,
 
-	ANALYSIS_XSTRIDE=4,
-	ANALYSIS_YSTRIDE=4,
+	ANALYSIS_XSTRIDE=5,
+	ANALYSIS_YSTRIDE=5,
 
 	DEFAULT_EFFORT_LEVEL=1,
 #ifdef MIX5
@@ -625,6 +625,42 @@ static void interleave_blocks_inv(const uint8_t *interleaved, int iw, int ih, ui
 }
 int codec_l1_avx512(int argc, char **argv)
 {
+	const char *srcfn=0, *dstfn=0;
+	FILE *fsrc=0;
+	int c=0;
+	int param1=0, dist=0;
+	int effort=0, profile=0;
+	int L1statesize=0;
+	int *L1state=0;
+	int fwd=0, iw=0, ih=0, rowstride=0;
+	RCTInfo rct={0};
+	int npreds=0, sh=0;
+	uint64_t bypassmask=0;//0: emit stats	1: rare context (bypass)
+	ptrdiff_t usize=0, cap=0;
+	uint8_t *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
+	int psize=0;
+	int16_t *pixels=0;
+	ptrdiff_t cheadersize=0, csize=0;
+	int blockw=0, blockh=0;
+	int qxbytes=0, ixcount=0, ixbytes=0;//ix = interleaved circular buffer width
+	int xremw=0, yremh=0, xrembytes=0;
+	int nctx=3*NCTX+3*(xremw||yremh);
+	ptrdiff_t isize=0, interleavedsize=0;
+	uint8_t *interleaved=0;
+	int hsize=0;
+	int *hists=0;
+	int CDF2syms_size=0;
+	uint32_t *CDF2syms=0;
+	int yidx=0, uidx=0, vidx=0;
+	__m512i uc0, vc0, vc1;
+#ifdef LOUD
+	double t=0;
+	ptrdiff_t usize2=0;
+#endif
+#ifdef ESTIMATE_SIZE
+	double esize[3*NCODERS]={0};
+#endif
+
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
 		printf(
@@ -637,17 +673,16 @@ int codec_l1_avx512(int argc, char **argv)
 		);
 		return 1;
 	}
-	const char *srcfn=argv[1], *dstfn=argv[2];
-	int param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
-	int effort=param1&3, profile=param1>>2;
+	srcfn=argv[1];
+	dstfn=argv[2];
+	param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]);
+	dist=argc<5?1:atoi(argv[4]);
 	if(dist>1)
 		CLAMP2(dist, 3, 31);
-#ifdef ESTIMATE_SIZE
-	double esize[3*NCODERS]={0};
-#endif
+	effort=param1&3;
+	profile=param1>>2;
 #ifdef LOUD
-	ptrdiff_t usize2=0;
-	double t=time_sec();
+	t=time_sec();
 	{
 		struct stat info={0};
 		stat(srcfn, &info);
@@ -655,138 +690,125 @@ int codec_l1_avx512(int argc, char **argv)
 	}
 #endif
 	prof_timestamp=time_sec();
-	//prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");
 		return 1;
 	}
-	int fwd=0, iw=0, ih=0, rowstride=0;
-	int bestrct=0, npreds=0, sh=0;
-	uint64_t bypassmask=0;//0: emit stats	1: rare context (bypass)
-	ptrdiff_t usize=0, cap=0;
-	uint8_t *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
-	int psize=0;
-	int16_t *pixels=0;
-	ptrdiff_t cheadersize=0, csize=0;
+	fsrc=fopen(srcfn, "rb");
+	if(!fsrc)
 	{
-		FILE *fsrc=fopen(srcfn, "rb");
-		if(!fsrc)
-		{
-			CRASH("Cannot open \"%s\"", srcfn);
-			return 1;
-		}
-		int tag=0;
-		fread(&tag, 1, 2, fsrc);
-		fwd=tag==('P'|'6'<<8);
-		if(!fwd&&tag!=('V'|'1'<<8))
-		{
-			CRASH("Unsupported file \"%s\"", srcfn);
-			return 1;
-		}
-		if(fwd)
-		{
-#ifdef LOUD
-			print_timestamp("%Y-%m-%d_%H%M%S\n");
-#endif
-			int temp=fgetc(fsrc);
-			if(temp!='\n')
-			{
-				CRASH("Invalid PPM file");
-				return 1;
-			}
-			int nread=fscanf(fsrc, "%d %d", &iw, &ih);
-			if(nread!=2)
-			{
-				CRASH("Unsupported PPM file");
-				return 1;
-			}
-			int vmax=0;
-			nread=fscanf(fsrc, "%d", &vmax);
-			if(nread!=1||vmax!=255)
-			{
-				CRASH("Unsupported PPM file");
-				return 1;
-			}
-			temp=fgetc(fsrc);
-			if(temp!='\n')
-			{
-				CRASH("Invalid PPM file");
-				return 1;
-			}
-		}
-		else
-		{
-			int flags=0;
-
-			iw=0;
-			ih=0;
-			dist=0;
-			fread(&iw, 1, 3, fsrc);
-			fread(&ih, 1, 3, fsrc);
-			fread(&flags, 1, 1, fsrc);
-			bestrct=flags>>2;
-			effort=flags&3;
-			fread(&dist, 1, 1, fsrc);
-			fread(&bypassmask, 1, 8, fsrc);
-			cheadersize=ftell(fsrc);
-		}
-		if(iw<1||ih<1)
-		{
-			CRASH("Unsupported source file");
-			return 1;
-		}
-		rowstride=3*iw;
-		usize=(ptrdiff_t)3*iw*ih;
-		cap=(ptrdiff_t)4*iw*ih;
-	//	image=(uint8_t*)_mm_malloc(cap+sizeof(__m512i), 0x1000);
-		image=(uint8_t*)malloc((size_t)cap+sizeof(__m512i));
-		if(!image)
-		{
-			CRASH("Alloc error");
-			return 1;
-		}
-		if(fwd)
-		{
-			fread(image, 1, (size_t)usize, fsrc);//read image
-			streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
-			profile_size(streamptr, "start");
-		}
-		else
-		{
-			struct stat info={0};
-			stat(srcfn, &info);
-			csize=info.st_size;
-			streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(__m512i);
-			streamend=image+cap-sizeof(__m512i);
-			fread(streamstart, 1, (size_t)(csize-cheadersize), fsrc);//read stream
-		}
-		fclose(fsrc);
+		CRASH("Cannot open \"%s\"", srcfn);
+		return 1;
 	}
+	fread(&c, 1, 2, fsrc);
+	fwd=c==('P'|'6'<<8);
+	if(!fwd&&c!=('V'|'1'<<8))
+	{
+		CRASH("Unsupported file \"%s\"", srcfn);
+		return 1;
+	}
+	if(fwd)
+	{
+		int nread=0, vmax=0;
+
+#ifdef LOUD
+		print_timestamp("%Y-%m-%d_%H%M%S\n");
+#endif
+		c=fgetc(fsrc);
+		if(c!='\n')
+		{
+			CRASH("Invalid PPM file");
+			return 1;
+		}
+		nread=fscanf(fsrc, "%d %d", &iw, &ih);
+		if(nread!=2)
+		{
+			CRASH("Unsupported PPM file");
+			return 1;
+		}
+		nread=fscanf(fsrc, "%d", &vmax);
+		if(nread!=1||vmax!=255)
+		{
+			CRASH("Unsupported PPM file");
+			return 1;
+		}
+		c=fgetc(fsrc);
+		if(c!='\n')
+		{
+			CRASH("Invalid PPM file");
+			return 1;
+		}
+	}
+	else
+	{
+		iw=0;
+		ih=0;
+		dist=0;
+		fread(&iw, 1, 3, fsrc);
+		fread(&ih, 1, 3, fsrc);
+		fread(&effort, 1, 1, fsrc);
+		fread(&rct, 1, sizeof(rct), fsrc);
+		fread(&dist, 1, 1, fsrc);
+		fread(&bypassmask, 1, 8, fsrc);
+		cheadersize=ftell(fsrc);
+	}
+	if(iw<1||ih<1)
+	{
+		CRASH("Unsupported source file");
+		return 1;
+	}
+	rowstride=3*iw;
+	usize=(ptrdiff_t)3*iw*ih;
+	cap=(ptrdiff_t)4*iw*ih;
+//	image=(uint8_t*)_mm_malloc(cap+sizeof(__m512i), 0x1000);
+	image=(uint8_t*)malloc((size_t)cap+sizeof(__m512i));
+	if(!image)
+	{
+		CRASH("Alloc error");
+		return 1;
+	}
+	if(fwd)
+	{
+		fread(image, 1, (size_t)usize, fsrc);//read image
+		streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
+		profile_size(streamptr, "start");
+	}
+	else
+	{
+		struct stat info={0};
+		stat(srcfn, &info);
+		csize=info.st_size;
+		streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(__m512i);
+		streamend=image+cap-sizeof(__m512i);
+		fread(streamstart, 1, (size_t)(csize-cheadersize), fsrc);//read stream
+	}
+	fclose(fsrc);
 	prof_checkpoint(fwd?usize:csize, "fread");
-	int blockw=iw/XCODERS;
-	int blockh=ih/YCODERS;
-	int qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
-	int ixcount=blockw*NCODERS, ixbytes=3*ixcount;//ix = interleaved circular buffer width		iw/XCODERS*NCODERS
-	int xremw=iw-blockw*XCODERS, yremh=ih-blockh*YCODERS;
-	int xrembytes=3*xremw;
-	int nctx=3*NCTX+3*(xremw||yremh);
-	ptrdiff_t isize=(ptrdiff_t)ixbytes*blockh;
-	ptrdiff_t interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
-	uint8_t *interleaved=(uint8_t*)_mm_malloc((size_t)interleavedsize, sizeof(__m512i));
+	blockw=iw/XCODERS;
+	blockh=ih/YCODERS;
+	qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
+	ixcount=blockw*NCODERS;
+	ixbytes=3*ixcount;//ix = interleaved circular buffer width		iw/XCODERS*NCODERS
+	xremw=iw-blockw*XCODERS;
+	yremh=ih-blockh*YCODERS;
+	xrembytes=3*xremw;
+	nctx=3*NCTX+3*(xremw||yremh);
+	isize=(ptrdiff_t)ixbytes*blockh;
+	interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
+	interleaved=(uint8_t*)_mm_malloc((size_t)interleavedsize, sizeof(__m512i));
 	if(!interleaved)
 	{
 		CRASH("Alloc error");
 		return 1;
 	}
-	(void)xrembytes;
-	int hsize=nctx*(int)sizeof(int[256]);
-	int *hists=fwd?(int*)malloc((size_t)hsize):0;//fwd-only
+	hsize=nctx*(int)sizeof(int[256]);
+	hists=fwd?(int*)malloc((size_t)hsize):0;//fwd-only
 
-	int CDF2syms_size=nctx*(int)sizeof(int32_t[1<<PROBBITS]);
+	CDF2syms_size=nctx*(int)sizeof(int32_t[1<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses this as SIMD symbol info
 		CDF2syms_size=nctx*(int)sizeof(rANS_SIMD_SymInfo[256]);
-	uint32_t *CDF2syms=(uint32_t*)_mm_malloc((size_t)CDF2syms_size, sizeof(__m512i));
+	CDF2syms=(uint32_t*)_mm_malloc((size_t)CDF2syms_size, sizeof(__m512i));
 
 	psize=(blockw+2*XPAD)*(int)sizeof(int16_t[NCH*NROWS*NVAL*NCODERS]);//int16_t[blockw+2*XPAD][NCH*NROWS*NVAL*NCODERS]
 	pixels=(int16_t*)_mm_malloc((size_t)psize, sizeof(__m512i));
@@ -813,124 +835,18 @@ int codec_l1_avx512(int argc, char **argv)
 		interleave_blocks_fwd(image, iw, ih, interleaved+isize);//reuse memory: read 8-bit pixel, write 16-bit context<<8|residual
 		guide_save(interleaved+isize, ixcount, blockh);
 		prof_checkpoint(usize, "interleave");
-		{//analysis
+		//analysis
+		{
 			int64_t counters[OCH_COUNT]={0};
 			__m512i mcounters[OCH_COUNT];//64-bit
 			__m256i half8=_mm256_set1_epi8(-128);
 			__m512i wordmask=_mm512_set1_epi64(0xFFFF);
+
 			memset(mcounters, 0, sizeof(mcounters));
 			imptr=interleaved+isize+ixbytes+3*NCODERS;
-#ifdef ANALYSIS_GRAD
 			for(int ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
-				for(int kx=1;kx<blockw-(ANALYSIS_XSTRIDE-1);kx+=ANALYSIS_XSTRIDE)
-				{
-					__m512i rNW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+0), half8));
-					__m512i rNW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+1), half8));
-					__m512i gNW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+2), half8));
-					__m512i gNW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+3), half8));
-					__m512i bNW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+4), half8));
-					__m512i bNW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+5), half8));
-					__m512i rN0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+0), half8));
-					__m512i rN1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+1), half8));
-					__m512i gN0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+2), half8));
-					__m512i gN1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+3), half8));
-					__m512i bN0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+4), half8));
-					__m512i bN1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+5), half8));
-					__m512i rW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+0), half8));
-					__m512i rW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+1), half8));
-					__m512i gW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+2), half8));
-					__m512i gW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+3), half8));
-					__m512i bW0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+4), half8));
-					__m512i bW1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+5), half8));
-					__m512i r0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+0), half8));
-					__m512i r1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+1), half8));
-					__m512i g0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+2), half8));
-					__m512i g1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+3), half8));
-					__m512i b0	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+4), half8));
-					__m512i b1	=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+5), half8));
-					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
-					r0=_mm512_sub_epi16(_mm512_sub_epi16(r0, rN0), _mm512_sub_epi16(rW0, rNW0));
-					g0=_mm512_sub_epi16(_mm512_sub_epi16(g0, gN0), _mm512_sub_epi16(gW0, gNW0));
-					b0=_mm512_sub_epi16(_mm512_sub_epi16(b0, bN0), _mm512_sub_epi16(bW0, bNW0));
-					r1=_mm512_sub_epi16(_mm512_sub_epi16(r1, rN1), _mm512_sub_epi16(rW1, rNW1));
-					g1=_mm512_sub_epi16(_mm512_sub_epi16(g1, gN1), _mm512_sub_epi16(gW1, gNW1));
-					b1=_mm512_sub_epi16(_mm512_sub_epi16(b1, bN1), _mm512_sub_epi16(bW1, bNW1));
-					r0=_mm512_slli_epi16(r0, 2);
-					g0=_mm512_slli_epi16(g0, 2);
-					b0=_mm512_slli_epi16(b0, 2);
-					r1=_mm512_slli_epi16(r1, 2);
-					g1=_mm512_slli_epi16(g1, 2);
-					b1=_mm512_slli_epi16(b1, 2);
-					__m512i rg0=_mm512_sub_epi16(r0, g0);
-					__m512i gb0=_mm512_sub_epi16(g0, b0);
-					__m512i br0=_mm512_sub_epi16(b0, r0);
-					__m512i rg1=_mm512_sub_epi16(r1, g1);
-					__m512i gb1=_mm512_sub_epi16(g1, b1);
-					__m512i br1=_mm512_sub_epi16(b1, r1);
-#define UPDATE(LANE, IDXA, A0, IDXB, B0, IDXC, C0)\
-	do\
-	{\
-		__m512i ta=A0, tb=B0, tc=C0;\
-		ta=_mm512_abs_epi16(ta);\
-		tb=_mm512_abs_epi16(tb);\
-		tc=_mm512_abs_epi16(tc);\
-		ta=_mm512_add_epi16(ta, _mm512_srli_epi64(ta, 32));\
-		tb=_mm512_add_epi16(tb, _mm512_srli_epi64(tb, 32));\
-		tc=_mm512_add_epi16(tc, _mm512_srli_epi64(tc, 32));\
-		ta=_mm512_add_epi16(ta, _mm512_srli_epi64(ta, 16));\
-		tb=_mm512_add_epi16(tb, _mm512_srli_epi64(tb, 16));\
-		tc=_mm512_add_epi16(tc, _mm512_srli_epi64(tc, 16));\
-		mcounters[IDXA]=_mm512_add_epi64(mcounters[IDXA], _mm512_and_si512(ta, wordmask));\
-		mcounters[IDXB]=_mm512_add_epi64(mcounters[IDXB], _mm512_and_si512(tb, wordmask));\
-		mcounters[IDXC]=_mm512_add_epi64(mcounters[IDXC], _mm512_and_si512(tc, wordmask));\
-	}while(0)
-					UPDATE(0, OCH_YX00, r0, OCH_Y0X0, g0, OCH_Y00X, b0);
-					UPDATE(1, OCH_YX00, r1, OCH_Y0X0, g1, OCH_Y00X, b1);
-					UPDATE(0, OCH_CX40, rg0, OCH_C0X4, gb0, OCH_C40X, br0);
-					UPDATE(1, OCH_CX40, rg1, OCH_C0X4, gb1, OCH_C40X, br1);
-#ifdef ENABLE_RCT_EXTENSION
-					UPDATE(0
-						, OCH_CX31, _mm512_add_epi16(rg0, _mm512_srai_epi16(gb0, 2))//r-(3*g+b)/4 = r-g-(b-g)/4
-						, OCH_C3X1, _mm512_add_epi16(rg0, _mm512_srai_epi16(br0, 2))//g-(3*r+b)/4 = g-r-(b-r)/4
-						, OCH_C31X, _mm512_add_epi16(br0, _mm512_srai_epi16(rg0, 2))//b-(3*r+g)/4 = b-r-(g-r)/4
-					);
-					UPDATE(1
-						, OCH_CX31, _mm512_add_epi16(rg1, _mm512_srai_epi16(gb1, 2))
-						, OCH_C3X1, _mm512_add_epi16(rg1, _mm512_srai_epi16(br1, 2))
-						, OCH_C31X, _mm512_add_epi16(br1, _mm512_srai_epi16(rg1, 2))
-					);
-					UPDATE(0
-						, OCH_CX13, _mm512_add_epi16(br0, _mm512_srai_epi16(gb0, 2))//r-(g+3*b)/4 = r-b-(g-b)/4
-						, OCH_C1X3, _mm512_add_epi16(gb0, _mm512_srai_epi16(br0, 2))//g-(r+3*b)/4 = g-b-(r-b)/4
-						, OCH_C13X, _mm512_add_epi16(gb0, _mm512_srai_epi16(rg0, 2))//b-(r+3*g)/4 = b-g-(r-g)/4
-					);
-					UPDATE(1
-						, OCH_CX13, _mm512_add_epi16(br1, _mm512_srai_epi16(gb1, 2))
-						, OCH_C1X3, _mm512_add_epi16(gb1, _mm512_srai_epi16(br1, 2))
-						, OCH_C13X, _mm512_add_epi16(gb1, _mm512_srai_epi16(rg1, 2))
-					);
-					UPDATE(0
-						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg0, br0), 1)//r-(g+b)/2 = (r-g + r-b)/2
-						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb0, rg0), 1)//g-(r+b)/2 = (g-r + g-b)/2
-						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br0, gb0), 1)//b-(r+g)/2 = (b-r + b-g)/2
-					);
-					UPDATE(1
-						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg1, br1), 1)
-						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb1, rg1), 1)
-						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br1, gb1), 1)
-					);
-#endif
-#undef  UPDATE
-				}
-				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
-			}
-#else
-			for(int ky=0;ky<blockh;ky+=ANALYSIS_YSTRIDE)
-			{
-				__m512i prev[OCH_COUNT][2];//16-bit
-				memset(prev, 0, sizeof(prev));
-				for(int kx=0;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				for(int kx=1;kx<blockw-ANALYSIS_XSTRIDE;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m512i r0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+0), half8));
 					__m512i r1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+1), half8));
@@ -938,7 +854,67 @@ int codec_l1_avx512(int argc, char **argv)
 					__m512i g1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+3), half8));
 					__m512i b0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+4), half8));
 					__m512i b1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+5), half8));
+					{
+						__m512i rt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+0), half8));//NW
+						__m512i rt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+1), half8));
+						__m512i gt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+2), half8));
+						__m512i gt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+3), half8));
+						__m512i bt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+4), half8));
+						__m512i bt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes-3*NCODERS)+5), half8));
+						r0=_mm512_add_epi16(r0, rt0);
+						g0=_mm512_add_epi16(g0, gt0);
+						b0=_mm512_add_epi16(b0, bt0);
+						r1=_mm512_add_epi16(r1, rt1);
+						g1=_mm512_add_epi16(g1, gt1);
+						b1=_mm512_add_epi16(b1, bt1);
+					}
+					{
+						__m512i rt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+0), half8));//N
+						__m512i rt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+1), half8));
+						__m512i gt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+2), half8));
+						__m512i gt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+3), half8));
+						__m512i bt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+4), half8));
+						__m512i bt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-ixbytes)+5), half8));
+						r0=_mm512_sub_epi16(r0, rt0);
+						g0=_mm512_sub_epi16(g0, gt0);
+						b0=_mm512_sub_epi16(b0, bt0);
+						r1=_mm512_sub_epi16(r1, rt1);
+						g1=_mm512_sub_epi16(g1, gt1);
+						b1=_mm512_sub_epi16(b1, bt1);
+					}
+					{
+						__m512i rt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+0), half8));//W
+						__m512i rt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+1), half8));
+						__m512i gt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+2), half8));
+						__m512i gt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+3), half8));
+						__m512i bt0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+4), half8));
+						__m512i bt1=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)(imptr-3*NCODERS)+5), half8));
+						r0=_mm512_sub_epi16(r0, rt0);
+						g0=_mm512_sub_epi16(g0, gt0);
+						b0=_mm512_sub_epi16(b0, bt0);
+						r1=_mm512_sub_epi16(r1, rt1);
+						g1=_mm512_sub_epi16(g1, gt1);
+						b1=_mm512_sub_epi16(b1, bt1);
+					}
 					imptr+=3*NCODERS*ANALYSIS_XSTRIDE;
+					__m512i r0q=r0;//quarter
+					__m512i g0q=g0;
+					__m512i b0q=b0;
+					__m512i r1q=r1;
+					__m512i g1q=g1;
+					__m512i b1q=b1;
+					__m512i r0h=_mm512_slli_epi16(r0, 1);//half
+					__m512i g0h=_mm512_slli_epi16(g0, 1);
+					__m512i b0h=_mm512_slli_epi16(b0, 1);
+					__m512i r1h=_mm512_slli_epi16(r1, 1);
+					__m512i g1h=_mm512_slli_epi16(g1, 1);
+					__m512i b1h=_mm512_slli_epi16(b1, 1);
+					__m512i r0t=_mm512_add_epi16(r0h, r0q);//three-quarters
+					__m512i g0t=_mm512_add_epi16(g0h, g0q);
+					__m512i b0t=_mm512_add_epi16(b0h, b0q);
+					__m512i r1t=_mm512_add_epi16(r1h, r1q);
+					__m512i g1t=_mm512_add_epi16(g1h, g1q);
+					__m512i b1t=_mm512_add_epi16(b1h, b1q);
 					r0=_mm512_slli_epi16(r0, 2);
 					g0=_mm512_slli_epi16(g0, 2);
 					b0=_mm512_slli_epi16(b0, 2);
@@ -951,102 +927,111 @@ int codec_l1_avx512(int argc, char **argv)
 					__m512i rg1=_mm512_sub_epi16(r1, g1);
 					__m512i gb1=_mm512_sub_epi16(g1, b1);
 					__m512i br1=_mm512_sub_epi16(b1, r1);
-#define UPDATE(LANE, IDXA, A0, IDXB, B0, IDXC, C0)\
+#define UPDATE(IDXA, A0, A1, IDXB, B0, B1, IDXC, C0, C1)\
 	do\
 	{\
-		__m512i t0=A0, t1=B0, t2=C0;\
-		__m512i ta=_mm512_sub_epi16(t0, prev[IDXA][LANE]);\
-		__m512i tb=_mm512_sub_epi16(t1, prev[IDXB][LANE]);\
-		__m512i tc=_mm512_sub_epi16(t2, prev[IDXC][LANE]);\
-		prev[IDXA][LANE]=t0;\
-		prev[IDXB][LANE]=t1;\
-		prev[IDXC][LANE]=t2;\
-		ta=_mm512_abs_epi16(ta);\
-		tb=_mm512_abs_epi16(tb);\
-		tc=_mm512_abs_epi16(tc);\
-		ta=_mm512_add_epi16(ta, _mm512_srli_epi64(ta, 32));\
-		tb=_mm512_add_epi16(tb, _mm512_srli_epi64(tb, 32));\
-		tc=_mm512_add_epi16(tc, _mm512_srli_epi64(tc, 32));\
-		ta=_mm512_add_epi16(ta, _mm512_srli_epi64(ta, 16));\
-		tb=_mm512_add_epi16(tb, _mm512_srli_epi64(tb, 16));\
-		tc=_mm512_add_epi16(tc, _mm512_srli_epi64(tc, 16));\
-		mcounters[IDXA]=_mm512_add_epi64(mcounters[IDXA], _mm512_and_si512(ta, wordmask));\
-		mcounters[IDXB]=_mm512_add_epi64(mcounters[IDXB], _mm512_and_si512(tb, wordmask));\
-		mcounters[IDXC]=_mm512_add_epi64(mcounters[IDXC], _mm512_and_si512(tc, wordmask));\
+		__m512i ta0=A0, tb0=B0, tc0=C0;\
+		__m512i ta1=A1, tb1=B1, tc1=C1;\
+		ta0=_mm512_abs_epi16(ta0);\
+		tb0=_mm512_abs_epi16(tb0);\
+		tc0=_mm512_abs_epi16(tc0);\
+		ta1=_mm512_abs_epi16(ta1);\
+		tb1=_mm512_abs_epi16(tb1);\
+		tc1=_mm512_abs_epi16(tc1);\
+		ta0=_mm512_add_epi16(ta0, ta1);\
+		tb0=_mm512_add_epi16(tb0, tb1);\
+		tc0=_mm512_add_epi16(tc0, tc1);\
+		ta0=_mm512_add_epi16(ta0, _mm512_srli_epi64(ta0, 32));\
+		tb0=_mm512_add_epi16(tb0, _mm512_srli_epi64(tb0, 32));\
+		tc0=_mm512_add_epi16(tc0, _mm512_srli_epi64(tc0, 32));\
+		ta0=_mm512_add_epi16(ta0, _mm512_srli_epi64(ta0, 16));\
+		tb0=_mm512_add_epi16(tb0, _mm512_srli_epi64(tb0, 16));\
+		tc0=_mm512_add_epi16(tc0, _mm512_srli_epi64(tc0, 16));\
+		mcounters[IDXA]=_mm512_add_epi64(mcounters[IDXA], _mm512_and_si512(ta0, wordmask));\
+		mcounters[IDXB]=_mm512_add_epi64(mcounters[IDXB], _mm512_and_si512(tb0, wordmask));\
+		mcounters[IDXC]=_mm512_add_epi64(mcounters[IDXC], _mm512_and_si512(tc0, wordmask));\
 	}while(0)
-					UPDATE(0, OCH_YX00, r0, OCH_Y0X0, g0, OCH_Y00X, b0);
-					UPDATE(1, OCH_YX00, r1, OCH_Y0X0, g1, OCH_Y00X, b1);
-					UPDATE(0, OCH_CX40, rg0, OCH_C0X4, gb0, OCH_C40X, br0);
-					UPDATE(1, OCH_CX40, rg1, OCH_C0X4, gb1, OCH_C40X, br1);
-#ifdef ENABLE_RCT_EXTENSION
-					UPDATE(0
-						, OCH_CX31, _mm512_add_epi16(rg0, _mm512_srai_epi16(gb0, 2))//r-(3*g+b)/4 = r-g-(b-g)/4
-						, OCH_C3X1, _mm512_add_epi16(rg0, _mm512_srai_epi16(br0, 2))//g-(3*r+b)/4 = g-r-(b-r)/4
-						, OCH_C31X, _mm512_add_epi16(br0, _mm512_srai_epi16(rg0, 2))//b-(3*r+g)/4 = b-r-(g-r)/4
+					UPDATE(
+						OCH_YX00, r0, r1,
+						OCH_Y0X0, g0, g1,
+						OCH_Y00X, b0, b1
 					);
-					UPDATE(1
-						, OCH_CX31, _mm512_add_epi16(rg1, _mm512_srai_epi16(gb1, 2))
-						, OCH_C3X1, _mm512_add_epi16(rg1, _mm512_srai_epi16(br1, 2))
-						, OCH_C31X, _mm512_add_epi16(br1, _mm512_srai_epi16(rg1, 2))
+					UPDATE(
+						OCH_CX10, _mm512_sub_epi16(r0, g0q), _mm512_sub_epi16(r1, g1q),
+						OCH_C0X1, _mm512_sub_epi16(g0, b0q), _mm512_sub_epi16(g1, b1q),
+						OCH_C10X, _mm512_sub_epi16(b0, r0q), _mm512_sub_epi16(b1, r1q)
 					);
-					UPDATE(0
-						, OCH_CX13, _mm512_add_epi16(br0, _mm512_srai_epi16(gb0, 2))//r-(g+3*b)/4 = r-b-(g-b)/4
-						, OCH_C1X3, _mm512_add_epi16(gb0, _mm512_srai_epi16(br0, 2))//g-(r+3*b)/4 = g-b-(r-b)/4
-						, OCH_C13X, _mm512_add_epi16(gb0, _mm512_srai_epi16(rg0, 2))//b-(r+3*g)/4 = b-g-(r-g)/4
+					UPDATE(
+						OCH_C1X0, _mm512_sub_epi16(g0, r0q), _mm512_sub_epi16(g1, r1q),
+						OCH_C01X, _mm512_sub_epi16(b0, g0q), _mm512_sub_epi16(b1, g1q),
+						OCH_CX01, _mm512_sub_epi16(r0, b0q), _mm512_sub_epi16(r1, b1q)
 					);
-					UPDATE(1
-						, OCH_CX13, _mm512_add_epi16(br1, _mm512_srai_epi16(gb1, 2))
-						, OCH_C1X3, _mm512_add_epi16(gb1, _mm512_srai_epi16(br1, 2))
-						, OCH_C13X, _mm512_add_epi16(gb1, _mm512_srai_epi16(rg1, 2))
+					UPDATE(
+						OCH_CX20, _mm512_sub_epi16(r0, g0h), _mm512_sub_epi16(r1, g1h),
+						OCH_C0X2, _mm512_sub_epi16(g0, b0h), _mm512_sub_epi16(g1, b1h),
+						OCH_C20X, _mm512_sub_epi16(b0, r0h), _mm512_sub_epi16(b1, r1h)
 					);
-					UPDATE(0
-						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg0, br0), 1)//r-(g+b)/2 = (r-g + r-b)/2
-						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb0, rg0), 1)//g-(r+b)/2 = (g-r + g-b)/2
-						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br0, gb0), 1)//b-(r+g)/2 = (b-r + b-g)/2
+					UPDATE(
+						OCH_C2X0, _mm512_sub_epi16(g0, r0h), _mm512_sub_epi16(g1, r1h),
+						OCH_C02X, _mm512_sub_epi16(b0, g0h), _mm512_sub_epi16(b1, g1h),
+						OCH_CX02, _mm512_sub_epi16(r0, b0h), _mm512_sub_epi16(r1, b1h)
 					);
-					UPDATE(1
-						, OCH_CX22, _mm512_srai_epi16(_mm512_sub_epi16(rg1, br1), 1)
-						, OCH_C2X2, _mm512_srai_epi16(_mm512_sub_epi16(gb1, rg1), 1)
-						, OCH_C22X, _mm512_srai_epi16(_mm512_sub_epi16(br1, gb1), 1)
+					UPDATE(
+						OCH_CX30, _mm512_sub_epi16(r0, g0t), _mm512_sub_epi16(r1, g1t),
+						OCH_C0X3, _mm512_sub_epi16(g0, b0t), _mm512_sub_epi16(g1, b1t),
+						OCH_C30X, _mm512_sub_epi16(b0, r0t), _mm512_sub_epi16(b1, r1t)
 					);
-#endif
+					UPDATE(
+						OCH_C3X0, _mm512_sub_epi16(g0, r0t), _mm512_sub_epi16(g1, r1t),
+						OCH_C03X, _mm512_sub_epi16(b0, g0t), _mm512_sub_epi16(b1, g1t),
+						OCH_CX03, _mm512_sub_epi16(r0, b0t), _mm512_sub_epi16(r1, b1t)
+					);
+					UPDATE(
+						OCH_CX40, rg0, rg1,
+						OCH_C0X4, gb0, gb1,
+						OCH_C40X, br0, br1
+					);
+					UPDATE(
+						OCH_CX11,  _mm512_sub_epi16(r0, _mm512_add_epi16(g0q, b0q)),  _mm512_sub_epi16(r1, _mm512_add_epi16(g1q, b1q)),
+						OCH_C1X1,  _mm512_sub_epi16(g0, _mm512_add_epi16(b0q, r0q)),  _mm512_sub_epi16(g1, _mm512_add_epi16(b1q, r1q)),
+						OCH_C11X,  _mm512_sub_epi16(b0, _mm512_add_epi16(r0q, g0q)),  _mm512_sub_epi16(b1, _mm512_add_epi16(r1q, g1q))
+					);
+					UPDATE(
+						OCH_CX21,  _mm512_sub_epi16(r0, _mm512_add_epi16(g0h, b0q)),  _mm512_sub_epi16(r1, _mm512_add_epi16(g1h, b1q)),
+						OCH_C1X2,  _mm512_sub_epi16(g0, _mm512_add_epi16(b0h, r0q)),  _mm512_sub_epi16(g1, _mm512_add_epi16(b1h, r1q)),
+						OCH_C21X,  _mm512_sub_epi16(b0, _mm512_add_epi16(r0h, g0q)),  _mm512_sub_epi16(b1, _mm512_add_epi16(r1h, g1q))
+					);
+					UPDATE(
+						OCH_CX12,  _mm512_sub_epi16(r0, _mm512_add_epi16(g0q, b0h)),  _mm512_sub_epi16(r1, _mm512_add_epi16(g1q, b1h)),
+						OCH_C2X1,  _mm512_sub_epi16(g0, _mm512_add_epi16(b0q, r0h)),  _mm512_sub_epi16(g1, _mm512_add_epi16(b1q, r1h)),
+						OCH_C12X,  _mm512_sub_epi16(b0, _mm512_add_epi16(r0q, g0h)),  _mm512_sub_epi16(b1, _mm512_add_epi16(r1q, g1h))
+					);
+					UPDATE(
+						OCH_CX31,  _mm512_add_epi16(rg0, _mm512_srai_epi16(gb0, 2)),  _mm512_add_epi16(rg1, _mm512_srai_epi16(gb1, 2)),//r-(3*g+b)/4 = r-g-(b-g)/4
+						OCH_C3X1,  _mm512_add_epi16(rg0, _mm512_srai_epi16(br0, 2)),  _mm512_add_epi16(rg1, _mm512_srai_epi16(br1, 2)),//g-(3*r+b)/4 = g-r-(b-r)/4
+						OCH_C31X,  _mm512_add_epi16(br0, _mm512_srai_epi16(rg0, 2)),  _mm512_add_epi16(br1, _mm512_srai_epi16(rg1, 2)) //b-(3*r+g)/4 = b-r-(g-r)/4
+					);
+					UPDATE(
+						OCH_CX13,  _mm512_add_epi16(br0, _mm512_srai_epi16(gb0, 2)),  _mm512_add_epi16(br1, _mm512_srai_epi16(gb1, 2)),//r-(g+3*b)/4 = r-b-(g-b)/4
+						OCH_C1X3,  _mm512_add_epi16(gb0, _mm512_srai_epi16(br0, 2)),  _mm512_add_epi16(gb1, _mm512_srai_epi16(br1, 2)),//g-(r+3*b)/4 = g-b-(r-b)/4
+						OCH_C13X,  _mm512_add_epi16(gb0, _mm512_srai_epi16(rg0, 2)),  _mm512_add_epi16(gb1, _mm512_srai_epi16(rg1, 2)) //b-(r+3*g)/4 = b-g-(r-g)/4
+					);
+					UPDATE(
+						OCH_CX22,  _mm512_srai_epi16(_mm512_sub_epi16(rg0, br0), 1),  _mm512_srai_epi16(_mm512_sub_epi16(rg1, br1), 1),//r-(g+b)/2 = (r-g + r-b)/2
+						OCH_C2X2,  _mm512_srai_epi16(_mm512_sub_epi16(gb0, rg0), 1),  _mm512_srai_epi16(_mm512_sub_epi16(gb1, rg1), 1),//g-(r+b)/2 = (g-r + g-b)/2
+						OCH_C22X,  _mm512_srai_epi16(_mm512_sub_epi16(br0, gb0), 1),  _mm512_srai_epi16(_mm512_sub_epi16(br1, gb1), 1) //b-(r+g)/2 = (b-r + b-g)/2
+					);
 #undef  UPDATE
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
-#endif
 			for(int k=0;k<OCH_COUNT;++k)
 			{
 				ALIGN(64) int64_t temp[8]={0};
 				_mm512_store_si512((__m512i*)temp, mcounters[k]);
 				counters[k]=temp[0]+temp[1]+temp[2]+temp[3]+temp[4]+temp[5]+temp[6]+temp[7];
 			}
-			int64_t minerr=0;
-			for(int kt=0;kt<RCT_COUNT;++kt)
-			{
-				const uint8_t *rct=rct_combinations[kt];
-				int64_t currerr=
-					+counters[rct[0]]
-					+counters[rct[1]]
-					+counters[rct[2]]
-				;
-#ifdef LOUD
-				printf("%2d  %-14s %12lld + %12lld + %12lld = %12lld%s\n"
-					, kt
-					, rct_names[kt]
-					, counters[rct[0]]
-					, counters[rct[1]]
-					, counters[rct[2]]
-					, currerr
-					, !kt||minerr>currerr?" <-":""
-				);
-#endif
-				if(!kt||minerr>currerr)
-				{
-					minerr=currerr;
-					bestrct=kt;
-				}
-			}
+			crct_select(counters, &rct);
 			prof_checkpoint(usize, "analysis");
 		}
 	}
@@ -1060,8 +1045,6 @@ int codec_l1_avx512(int argc, char **argv)
 		streamptr=(uint8_t*)(size_t)ec.srcfwdptr;
 		prof_checkpoint(CDF2syms_size, "unpack histograms");
 	}
-	int L1statesize=0;
-	int *L1state=0;
 	switch(effort)
 	{
 	case 0://use CG
@@ -1085,7 +1068,16 @@ int codec_l1_avx512(int argc, char **argv)
 #ifndef LOUD
 		if(profile)
 #endif
-			printf("%s  NPREDS=%d  %td bytes\n", rct_names[bestrct], npreds, usize);
+			printf("NPREDS=%d  RCT[%d%d%d %d %d%d]  %td bytes\n"
+				, npreds
+				, rct.perm[0]
+				, rct.perm[1]
+				, rct.perm[2]
+				, rct.vc1
+				, rct.vc0
+				, rct.vc1
+				, usize
+			);
 	}
 	if(effort)
 	{
@@ -1098,14 +1090,12 @@ int codec_l1_avx512(int argc, char **argv)
 		}
 		memset(L1state, 0, (size_t)L1statesize);
 	}
-	const uint8_t *combination=rct_combinations[bestrct];
-	int
-		yidx=combination[II_PERM_Y]*NCODERS,
-		uidx=combination[II_PERM_U]*NCODERS,
-		vidx=combination[II_PERM_V]*NCODERS;
-	__m512i uhelpmask=_mm512_set1_epi16((int16_t)-(combination[II_COEFF_U_SUB_Y]!=0));
-	__m512i vc0=_mm512_set1_epi16(combination[II_COEFF_V_SUB_Y]);
-	__m512i vc1=_mm512_set1_epi16(combination[II_COEFF_V_SUB_U]);
+	yidx=rct.perm[0]*NCODERS;
+	uidx=rct.perm[1]*NCODERS;
+	vidx=rct.perm[2]*NCODERS;
+	uc0=_mm512_set1_epi16(rct.uc0);
+	vc0=_mm512_set1_epi16(rct.vc0);
+	vc1=_mm512_set1_epi16(rct.vc1);
 	memset(pixels, 0, (size_t)psize);
 	__m512i mctxmax=_mm512_set1_epi16(NCTX-1);
 	__m512i mctxuoffset=_mm512_set1_epi16(NCTX);
@@ -2209,8 +2199,10 @@ int codec_l1_avx512(int argc, char **argv)
 				}
 				
 				//decorrelate U
-				moffset[0]=_mm512_and_si512(myuv[0], uhelpmask);
-				moffset[1]=_mm512_and_si512(myuv[1], uhelpmask);
+				moffset[0]=_mm512_mullo_epi16(myuv[0], uc0);
+				moffset[1]=_mm512_mullo_epi16(myuv[1], uc0);
+				moffset[0]=_mm512_srai_epi16(moffset[0], 2);
+				moffset[1]=_mm512_srai_epi16(moffset[1], 2);
 				pred[2]=_mm512_add_epi16(pred[2], moffset[0]);
 				pred[3]=_mm512_add_epi16(pred[3], moffset[1]);
 				pred[2]=_mm512_max_epi16(pred[2], amin); pred[2]=_mm512_min_epi16(pred[2], amax);
@@ -2485,8 +2477,10 @@ int codec_l1_avx512(int argc, char **argv)
 #endif
 
 				//reconstruct U
-				moffset[0]=_mm512_and_si512(myuv[0], uhelpmask);
-				moffset[1]=_mm512_and_si512(myuv[1], uhelpmask);
+				moffset[0]=_mm512_mullo_epi16(myuv[0], uc0);
+				moffset[1]=_mm512_mullo_epi16(myuv[1], uc0);
+				moffset[0]=_mm512_srai_epi16(moffset[0], 2);
+				moffset[1]=_mm512_srai_epi16(moffset[1], 2);
 				pred[2]=_mm512_add_epi16(pred[2], moffset[0]);
 				pred[3]=_mm512_add_epi16(pred[3], moffset[1]);
 				pred[2]=_mm512_max_epi16(pred[2], amin); pred[2]=_mm512_min_epi16(pred[2], amax);
@@ -2955,9 +2949,9 @@ int codec_l1_avx512(int argc, char **argv)
 		if(xremw||yremh)
 		{
 			for(int ky=0;ky<yremh;++ky)
-				decorr1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, rhist);
+				decorr1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &rct, rhist);
 			for(int kx=0;kx<xremw;++kx)
-				decorr1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, rhist);
+				decorr1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &rct, rhist);
 		}
 
 		//normalize/integrate hists
@@ -3247,10 +3241,8 @@ int codec_l1_avx512(int argc, char **argv)
 			csize2+=(ptrdiff_t)fwrite("V1", 1, 2, fdst);
 			csize2+=(ptrdiff_t)fwrite(&iw, 1, 3, fdst);
 			csize2+=(ptrdiff_t)fwrite(&ih, 1, 3, fdst);
-			{
-				int flags=bestrct<<2|effort;
-				csize2+=(ptrdiff_t)fwrite(&flags, 1, 1, fdst);
-			}
+			csize2+=fwrite(&effort, 1, 1, fdst);
+			csize2+=fwrite(&rct, 1, sizeof(rct), fdst);
 			csize2+=(ptrdiff_t)fwrite(&dist, 1, 1, fdst);
 			csize2+=(ptrdiff_t)fwrite(&bypassmask, 1, 8, fdst);
 #ifdef _DEBUG
@@ -3274,11 +3266,15 @@ int codec_l1_avx512(int argc, char **argv)
 			printf("Total estimate  %12.2lf bytes\n", etotal);
 #endif
 #ifdef LOUD
-			printf("L1C AVX512 WH %d*%d  RCT %2d %s  effort %d  dist %3d  \"%s\"\n"
+			printf("L1C AVX512 WH %d*%d  RCT[%d%d%d %d %d%d]  effort %d  dist %3d  \"%s\"\n"
 				, iw
 				, ih
-				, bestrct
-				, rct_names[bestrct]
+				, rct.perm[0]
+				, rct.perm[1]
+				, rct.perm[2]
+				, rct.uc0
+				, rct.vc0
+				, rct.vc1
 				, effort
 				, dist
 				, srcfn
@@ -3332,9 +3328,9 @@ int codec_l1_avx512(int argc, char **argv)
 			uint32_t state=*(uint32_t*)streamptr;
 			streamptr+=4;
 			for(int ky=0;ky<yremh;++ky)
-				decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
+				decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &rct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
 			for(int kx=0;kx<xremw;++kx)
-				decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
+				decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &rct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
 			prof_checkpoint(usize-isize, "remainder");
 		}
 
@@ -3359,8 +3355,9 @@ int codec_l1_avx512(int argc, char **argv)
 #endif
 	(void)och_names;
 	(void)rct_names;
-	(void)print_timestamp;
-	(void)encode1d_port;
-	(void)encode1d_sse41;
+	(void)xrembytes;
+	(void)&print_timestamp;
+	(void)&encode1d_port;
+	(void)&encode1d_sse41;
 	return 0;
 }

@@ -8,6 +8,8 @@
 #include<stdlib.h>
 #include<string.h>
 #include<stdarg.h>
+#define _USE_MATH_DEFINES
+#include<math.h>
 #include<time.h>
 #if defined _WIN32 || defined WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -427,7 +429,7 @@ static void prof_print(ptrdiff_t usize)
 		printf("\n");
 	}
 	printf("\n");
-	printf("%16.7lf ms %12.6lf MB/s Total\n", timesum*1000, (double)usize/(timesum*1024*1024));
+	printf("%13.4lf ms %12.6lf MB/s Total\n", timesum*1000, (double)usize/(timesum*1024*1024));
 	printf("\n");
 	prof_count=0;
 	prof_timestamp=0;
@@ -439,18 +441,44 @@ static void prof_print(ptrdiff_t usize)
 
 //cRCT
 #if 1
-#ifndef ENABLE_RCT_EXTENSION
+//v3
+#if 1
 #define OCHLIST\
 	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
-	OCH(CX40) OCH(C0X4) OCH(C40X)
+\
+	OCH(CX10) OCH(C0X1) OCH(C10X)\
+	OCH(C1X0) OCH(C01X) OCH(CX01)\
+\
+	OCH(CX20) OCH(C0X2) OCH(C20X)\
+	OCH(C2X0) OCH(C02X) OCH(CX02)\
+\
+	OCH(CX30) OCH(C0X3) OCH(C30X)\
+	OCH(C3X0) OCH(C03X) OCH(CX03)\
+\
+	OCH(CX40) OCH(C0X4) OCH(C40X)\
+\
+	OCH(CX21) OCH(C2X1) OCH(C21X)\
+	OCH(CX12) OCH(C1X2) OCH(C12X)\
+	OCH(CX11) OCH(C1X1) OCH(C11X)\
+\
+	OCH(CX31) OCH(C3X1) OCH(C31X)\
+	OCH(CX13) OCH(C1X3) OCH(C13X)\
+	OCH(CX22) OCH(C2X2) OCH(C22X)\
+
 #endif
-#ifdef ENABLE_RCT_EXTENSION
+
+//v2
+#if 0
 #define OCHLIST\
 	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
 	OCH(CX40) OCH(C0X4) OCH(C40X)\
 	OCH(CX31) OCH(C3X1) OCH(C31X)\
 	OCH(CX13) OCH(C1X3) OCH(C13X)\
-	OCH(CX22) OCH(C2X2) OCH(C22X)
+	OCH(CX22) OCH(C2X2) OCH(C22X)\
+
+#endif
+
+//v1.5
 #if 0
 #define OCHLIST\
 	OCH(Y400) OCH(Y040) OCH(Y004)\
@@ -460,8 +488,16 @@ static void prof_print(ptrdiff_t usize)
 	OCH(CX40) OCH(C0X4) OCH(C40X)\
 	OCH(CX31) OCH(C3X1) OCH(C31X)\
 	OCH(CX13) OCH(C1X3) OCH(C13X)\
-	OCH(CX22) OCH(C2X2) OCH(C22X)
+	OCH(CX22) OCH(C2X2) OCH(C22X)\
+
 #endif
+
+//v1
+#if 0
+#define OCHLIST\
+	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
+	OCH(CX40) OCH(C0X4) OCH(C40X)\
+
 #endif
 typedef enum _OCHIndex
 {
@@ -494,6 +530,101 @@ typedef enum _OCHIndex
 	OCH_B3=OCH_C31X,
 #endif
 } OCHIndex;
+typedef struct _RCTInfo
+{
+	uint8_t perm[3], uc0, vc0, vc1;
+} RCTInfo;
+static void crct_select(int64_t *counters, RCTInfo *ret_rct)
+{
+	static const int perm[]=
+	{//	y, u, v,	y, u, v,
+		0, 1, 2,	2, 1, 0,
+		2, 0, 1,	1, 0, 2,
+		1, 2, 0,	0, 2, 1,
+	};
+	static const uint8_t indices0[]=
+	{//	OCH__RGB
+		OCH_YX00,//012 rgb
+		OCH_Y00X,//210 bgr
+		OCH_Y00X,//201 brg
+		OCH_Y0X0,//102 grb
+		OCH_Y0X0,//120 gbr
+		OCH_YX00,//021 rbg
+	};
+	static const uint8_t indices1[]=
+	{
+		OCH_Y0X0, OCH_C1X0, OCH_C2X0, OCH_C3X0, OCH_C4X0,//012 rgb
+		OCH_Y0X0, OCH_C0X1, OCH_C0X2, OCH_C0X3, OCH_C0X4,//210 bgr
+		OCH_YX00, OCH_CX01, OCH_CX02, OCH_CX03, OCH_CX04,//201 brg
+		OCH_YX00, OCH_CX10, OCH_CX20, OCH_CX30, OCH_CX40,//102 grb
+		OCH_Y00X, OCH_C01X, OCH_C02X, OCH_C03X, OCH_C04X,//120 gbr
+		OCH_Y00X, OCH_C10X, OCH_C20X, OCH_C30X, OCH_C40X,//021 rbg
+	};
+	static const uint8_t indices2[]=
+	{
+		OCH_Y00X, OCH_C01X, OCH_C02X, OCH_C03X, OCH_C04X, OCH_C10X, OCH_C11X, OCH_C12X, OCH_C13X, OCH_C20X, OCH_C21X, OCH_C22X, OCH_C30X, OCH_C31X, OCH_C40X,//012 rgb
+		OCH_YX00, OCH_CX10, OCH_CX20, OCH_CX30, OCH_CX40, OCH_CX01, OCH_CX11, OCH_CX21, OCH_CX31, OCH_CX02, OCH_CX12, OCH_CX22, OCH_CX03, OCH_CX13, OCH_CX04,//210 bgr
+		OCH_Y0X0, OCH_C1X0, OCH_C2X0, OCH_C3X0, OCH_C4X0, OCH_C0X1, OCH_C1X1, OCH_C2X1, OCH_C3X1, OCH_C0X2, OCH_C1X2, OCH_C2X2, OCH_C0X3, OCH_C1X3, OCH_C0X4,//201 brg
+		OCH_Y00X, OCH_C10X, OCH_C20X, OCH_C30X, OCH_C40X, OCH_C01X, OCH_C11X, OCH_C21X, OCH_C31X, OCH_C02X, OCH_C12X, OCH_C22X, OCH_C03X, OCH_C13X, OCH_C04X,//102 grb
+		OCH_YX00, OCH_CX01, OCH_CX02, OCH_CX03, OCH_CX04, OCH_CX10, OCH_CX11, OCH_CX12, OCH_CX13, OCH_CX20, OCH_CX21, OCH_CX22, OCH_CX30, OCH_CX31, OCH_CX40,//120 gbr
+		OCH_Y0X0, OCH_C0X1, OCH_C0X2, OCH_C0X3, OCH_C0X4, OCH_C1X0, OCH_C1X1, OCH_C1X2, OCH_C1X3, OCH_C2X0, OCH_C2X1, OCH_C2X2, OCH_C3X0, OCH_C3X1, OCH_C4X0,//021 rbg
+	};
+	static const uint8_t param2[]=
+	{
+		0, 0,	0, 1,	0, 2,	0, 3,	0, 4,
+		1, 0,	1, 1,	1, 2,	1, 3,
+		2, 0,	2, 1,	2, 2,
+		3, 0,	3, 1,
+		4, 0,
+	};
+	int64_t ebest=0;
+	RCTInfo rct={0};
+	int rctno=0;
+
+	for(int kp=0;kp<6;++kp)
+	{
+		const uint8_t *idx1=indices1+kp*5;
+		const uint8_t *idx2=indices2+kp*15;
+		uint8_t yidx=indices0[kp];
+
+		for(int p1=0;p1<5;++p1)
+		{
+			for(int p2=0;p2<15;++p2)
+			{
+				int64_t e=counters[yidx]+counters[idx1[p1]]+counters[idx2[p2]];
+#if defined LOUD &&0
+				printf("%4d  %16lld  =[%2d]%16lld +[%2d]%16lld +[%2d]%16lld  RCT[%d%d%d %d %d%d]%s\n"
+					, rctno
+					, e
+					, yidx, counters[yidx]
+					, idx1[p1], counters[idx1[p1]]
+					, idx2[p2], counters[idx2[p2]]
+					, perm[kp*3+0]
+					, perm[kp*3+1]
+					, perm[kp*3+2]
+					, p1
+					, param2[p2*2+0]
+					, param2[p2*2+1]
+					, !ebest||ebest>e?" <-":""
+				);
+				++rctno;
+#endif
+				if(!ebest||ebest>e)
+				{
+					ebest=e;
+					rct.perm[0]=perm[kp*3+0];
+					rct.perm[1]=perm[kp*3+1];
+					rct.perm[2]=perm[kp*3+2];
+					rct.uc0=p1;
+					rct.vc0=param2[p2*2+0];
+					rct.vc1=param2[p2*2+1];
+				}
+			}
+		}
+	}
+	*ret_rct=rct;
+	(void)rctno;
+}
 static const char *och_names[]=
 {
 #define OCH(X) #X,
@@ -552,6 +683,7 @@ typedef enum _RCTInfoIdx
 	RCT(_0X0_00X_X04,	OCH_G,		OCH_B,		OCH_RB,		1, 2, 0,	0,  0, 4)\
 	RCT(_00X_X00_4X0,	OCH_B,		OCH_R,		OCH_GR,		2, 0, 1,	0,  0, 4)\
 	RCT(_00X_X00_0X4,	OCH_B,		OCH_R,		OCH_GB,		2, 0, 1,	0,  4, 0)\
+\
 	RCT(_0X0_04X_X40,	OCH_G,		OCH_BG,		OCH_RG,		1, 2, 0,	4,  4, 0)\
 	RCT(_0X0_04X_X04,	OCH_G,		OCH_BG,		OCH_RB,		1, 2, 0,	4,  0, 4)\
 	RCT(_0X0_X40_40X,	OCH_G,		OCH_RG,		OCH_BR,		1, 0, 2,	4,  0, 4)\
@@ -561,6 +693,37 @@ typedef enum _RCTInfoIdx
 	RCT(_X00_4X0_40X,	OCH_R,		OCH_GR,		OCH_BR,		0, 1, 2,	4,  4, 0)\
 	RCT(_X00_4X0_04X,	OCH_R,		OCH_GR,		OCH_BG,		0, 1, 2,	4,  0, 4)\
 	RCT(_X00_40X_0X4,	OCH_R,		OCH_BR,		OCH_GB,		0, 2, 1,	4,  0, 4)\
+\
+	RCT(_0X0_03X_X40,	OCH_G,		OCH_C03X,	OCH_RG,		1, 2, 0,	3,  4, 0)\
+	RCT(_0X0_03X_X04,	OCH_G,		OCH_C03X,	OCH_RB,		1, 2, 0,	3,  0, 4)\
+	RCT(_0X0_X30_40X,	OCH_G,		OCH_CX30,	OCH_BR,		1, 0, 2,	3,  0, 4)\
+	RCT(_00X_X03_0X4,	OCH_B,		OCH_CX03,	OCH_GB,		2, 0, 1,	3,  4, 0)\
+	RCT(_00X_X03_4X0,	OCH_B,		OCH_CX03,	OCH_GR,		2, 0, 1,	3,  0, 4)\
+	RCT(_00X_0X3_X40,	OCH_B,		OCH_C0X3,	OCH_RG,		2, 1, 0,	3,  0, 4)\
+	RCT(_X00_3X0_40X,	OCH_R,		OCH_C3X0,	OCH_BR,		0, 1, 2,	3,  4, 0)\
+	RCT(_X00_3X0_04X,	OCH_R,		OCH_C3X0,	OCH_BG,		0, 1, 2,	3,  0, 4)\
+	RCT(_X00_30X_0X4,	OCH_R,		OCH_C30X,	OCH_GB,		0, 2, 1,	3,  0, 4)\
+\
+	RCT(_0X0_04X_X30,	OCH_G,		OCH_BG,		OCH_CX30,	1, 2, 0,	4,  3, 0)\
+	RCT(_0X0_04X_X03,	OCH_G,		OCH_BG,		OCH_CX03,	1, 2, 0,	4,  0, 3)\
+	RCT(_0X0_X40_30X,	OCH_G,		OCH_RG,		OCH_C30X,	1, 0, 2,	4,  0, 3)\
+	RCT(_00X_X04_0X3,	OCH_B,		OCH_RB,		OCH_C0X3,	2, 0, 1,	4,  3, 0)\
+	RCT(_00X_X04_3X0,	OCH_B,		OCH_RB,		OCH_C3X0,	2, 0, 1,	4,  0, 3)\
+	RCT(_00X_0X4_X30,	OCH_B,		OCH_GB,		OCH_CX30,	2, 1, 0,	4,  0, 3)\
+	RCT(_X00_4X0_30X,	OCH_R,		OCH_GR,		OCH_C30X,	0, 1, 2,	4,  3, 0)\
+	RCT(_X00_4X0_03X,	OCH_R,		OCH_GR,		OCH_C03X,	0, 1, 2,	4,  0, 3)\
+	RCT(_X00_40X_0X3,	OCH_R,		OCH_BR,		OCH_C0X3,	0, 2, 1,	4,  0, 3)\
+\
+	RCT(_0X0_03X_X30,	OCH_G,		OCH_C03X,	OCH_CX30,	1, 2, 0,	3,  3, 0)\
+	RCT(_0X0_03X_X03,	OCH_G,		OCH_C03X,	OCH_CX03,	1, 2, 0,	3,  0, 3)\
+	RCT(_0X0_X30_30X,	OCH_G,		OCH_CX30,	OCH_C30X,	1, 0, 2,	3,  0, 3)\
+	RCT(_00X_X03_0X3,	OCH_B,		OCH_CX03,	OCH_C0X3,	2, 0, 1,	3,  3, 0)\
+	RCT(_00X_X03_3X0,	OCH_B,		OCH_CX03,	OCH_C3X0,	2, 0, 1,	3,  0, 3)\
+	RCT(_00X_0X3_X30,	OCH_B,		OCH_C0X3,	OCH_CX30,	2, 1, 0,	3,  0, 3)\
+	RCT(_X00_3X0_30X,	OCH_R,		OCH_C3X0,	OCH_C30X,	0, 1, 2,	3,  3, 0)\
+	RCT(_X00_3X0_03X,	OCH_R,		OCH_C3X0,	OCH_C03X,	0, 1, 2,	3,  0, 3)\
+	RCT(_X00_30X_0X3,	OCH_R,		OCH_C30X,	OCH_C0X3,	0, 2, 1,	3,  0, 3)\
+\
 	RCT(_X00_0X0_13X,	OCH_R,		OCH_G,		OCH_B1,		0, 1, 2,	0,  1, 3)\
 	RCT(_X00_4X0_13X,	OCH_R,		OCH_GR,		OCH_B1,		0, 1, 2,	4,  1, 3)\
 	RCT(_X00_00X_3X1,	OCH_R,		OCH_B,		OCH_G1,		0, 2, 1,	0,  3, 1)\
@@ -587,7 +750,27 @@ typedef enum _RCTInfoIdx
 	RCT(_0X0_04X_X31,	OCH_G,		OCH_BG,		OCH_R3,		1, 2, 0,	4,  3, 1)\
 	RCT(_0X0_X40_31X,	OCH_G,		OCH_RG,		OCH_B3,		1, 0, 2,	4,  1, 3)\
 	RCT(_00X_X04_1X3,	OCH_B,		OCH_RB,		OCH_G3,		2, 0, 1,	4,  3, 1)\
-	RCT(_00X_0X4_X31,	OCH_B,		OCH_GB,		OCH_R3,		2, 1, 0,	4,  1, 3)
+	RCT(_00X_0X4_X31,	OCH_B,		OCH_GB,		OCH_R3,		2, 1, 0,	4,  1, 3)\
+\
+	RCT(_X00_3X0_13X,	OCH_R,		OCH_C3X0,	OCH_B1,		0, 1, 2,	3,  1, 3)\
+	RCT(_X00_30X_3X1,	OCH_R,		OCH_C30X,	OCH_G1,		0, 2, 1,	3,  3, 1)\
+	RCT(_0X0_03X_X13,	OCH_G,		OCH_C03X,	OCH_R1,		1, 2, 0,	3,  1, 3)\
+	RCT(_0X0_X30_13X,	OCH_G,		OCH_CX30,	OCH_B1,		1, 0, 2,	3,  3, 1)\
+	RCT(_00X_X03_3X1,	OCH_B,		OCH_CX03,	OCH_G1,		2, 0, 1,	3,  1, 3)\
+	RCT(_00X_03X_X13,	OCH_B,		OCH_C03X,	OCH_R1,		2, 1, 0,	3,  3, 1)\
+	RCT(_X00_3X0_22X,	OCH_R,		OCH_C3X0,	OCH_B2,		0, 1, 2,	3,  2, 2)\
+	RCT(_X00_30X_2X2,	OCH_R,		OCH_C30X,	OCH_G2,		0, 2, 1,	3,  2, 2)\
+	RCT(_0X0_03X_X22,	OCH_G,		OCH_C03X,	OCH_R2,		1, 2, 0,	3,  2, 2)\
+	RCT(_0X0_X30_22X,	OCH_G,		OCH_CX30,	OCH_B2,		1, 0, 2,	3,  2, 2)\
+	RCT(_00X_X03_2X2,	OCH_B,		OCH_CX03,	OCH_G2,		2, 0, 1,	3,  2, 2)\
+	RCT(_00X_0X3_X22,	OCH_B,		OCH_C0X3,	OCH_R2,		2, 1, 0,	3,  2, 2)\
+	RCT(_X00_3X0_31X,	OCH_R,		OCH_C3X0,	OCH_B3,		0, 1, 2,	3,  3, 1)\
+	RCT(_X00_30X_1X3,	OCH_R,		OCH_C30X,	OCH_G3,		0, 2, 1,	3,  1, 3)\
+	RCT(_0X0_03X_X31,	OCH_G,		OCH_C03X,	OCH_R3,		1, 2, 0,	3,  3, 1)\
+	RCT(_0X0_X30_31X,	OCH_G,		OCH_CX30,	OCH_B3,		1, 0, 2,	3,  1, 3)\
+	RCT(_00X_X03_1X3,	OCH_B,		OCH_CX03,	OCH_G3,		2, 0, 1,	3,  3, 1)\
+	RCT(_00X_0X3_X31,	OCH_B,		OCH_C0X3,	OCH_R3,		2, 1, 0,	3,  1, 3)\
+
 #if 0
 	RCT(_211_4X0_40X,	OCH_Y211,	OCH_C4X0,	OCH_C40X,	0, 1, 2,	4,  4, 0,	1, 1, 0, 0)\
 	RCT(_211_4X0_31X,	OCH_Y211,	OCH_C4X0,	OCH_C31X,	0, 1, 2,	4,  4, 0,	1, 1, 0, 1)\
@@ -1256,7 +1439,47 @@ static void save_ppm(const char *fn, const uint8_t *image, int iw, int ih)
 //	fwrite(image, 1, (ptrdiff_t)3*iw*ih, fdst);
 	fclose(fdst);
 }
-static void decorr1d(uint8_t *data, int count, int bytestride, int bestrct, int *rhist)
+static void decorr1d(uint8_t *data, int count, int bytestride, RCTInfo *rct, int *rhist)
+{
+	int yidx=rct->perm[0];
+	int uidx=rct->perm[1];
+	int vidx=rct->perm[2];
+	int uc0=rct->uc0;
+	int vc0=rct->vc0;
+	int vc1=rct->vc1;
+
+	uint8_t *ptr=data;
+	int prevy=0, prevu=0, prevv=0, offset=0;
+	int k, vpred;
+	for(k=0;k<count;++k)
+	{
+		int y=ptr[yidx]-128;
+		int u=ptr[uidx]-128;
+		int v=ptr[vidx]-128;
+		int sym;
+
+		ptr[0]=sym=(uint8_t)(y-prevy+128);
+		++rhist[256*0+sym];
+		prevy=y;
+
+		offset=uc0*y>>2;
+		prevu+=offset;
+		CLAMP2(prevu, -128, 127);
+		ptr[1]=sym=(uint8_t)(u-prevu+128);
+		++rhist[256*1+sym];
+		prevu=u-offset;
+
+		offset=vc0*y+vc1*u;
+		vpred=(prevv+offset)>>2;
+		CLAMP2(vpred, -128, 127);
+		ptr[2]=sym=(uint8_t)(v-vpred+128);
+		++rhist[256*2+sym];
+		prevv=4*v-offset;
+		ptr+=bytestride;
+	}
+}
+#if 0
+static void decorr1d_deprecated(uint8_t *data, int count, int bytestride, int bestrct, int *rhist)
 {
 	const uint8_t *combination=rct_combinations[bestrct];
 	int yidx=combination[II_PERM_Y];
@@ -1296,6 +1519,7 @@ static void decorr1d(uint8_t *data, int count, int bytestride, int bestrct, int 
 		ptr+=bytestride;
 	}
 }
+#endif
 static void encode1d_port(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
 {
 	uint8_t *streamptr=*pstreamptr;
@@ -1493,7 +1717,95 @@ static void encode1d(uint8_t *data, int count, int bytestride, unsigned *pstate,
 	(void)streamend;
 #endif
 }
-static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsigned *pstate, const uint8_t **pstreamptr, const uint8_t *streamend, unsigned *rCDF2syms)
+static void decode1d(uint8_t *data, int count, int bytestride, RCTInfo *rct, unsigned *pstate, const uint8_t **pstreamptr, const uint8_t *streamend, unsigned *rCDF2syms)
+{
+	int yidx=rct->perm[0];
+	int uidx=rct->perm[1];
+	int vidx=rct->perm[2];
+	int uc0=rct->uc0;
+	int vc0=rct->vc0;
+	int vc1=rct->vc1;
+
+	const uint8_t *streamptr=*pstreamptr;
+	unsigned state=*pstate;
+	uint8_t *ptr=data;
+	int prevy=0, prevu=0, prevv=0, offset=0;
+	int y=0, u=0, v=0;
+	int k, vpred;
+	for(k=0;k<count;++k)
+	{
+		unsigned info;
+
+		//yuv = (int8_t)(error+N-128)
+		info=rCDF2syms[0<<PROBBITS|(state&((1<<PROBBITS)-1))];
+		y=(int8_t)(info+prevy-128);
+		prevy=y;
+#ifdef ANS_VAL
+		ansval_check(&state, sizeof(state), 1);
+#endif
+		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
+		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
+		{
+#ifdef _DEBUG
+			if(streamptr>streamend)
+				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
+#endif
+			state=state<<16|*(uint16_t*)streamptr;
+			streamptr+=2;
+		}
+
+		offset=uc0*y>>2;
+		prevu+=offset;
+		CLAMP2(prevu, -128, 127);
+		info=rCDF2syms[1<<PROBBITS|(state&((1<<PROBBITS)-1))];
+		u=(int8_t)(info+prevu-128);
+		prevu=u-offset;
+#ifdef ANS_VAL
+		ansval_check(&state, sizeof(state), 1);
+#endif
+		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
+		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
+		{
+#ifdef _DEBUG
+			if(streamptr>streamend)
+				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
+#endif
+			state=state<<16|*(uint16_t*)streamptr;
+			streamptr+=2;
+		}
+
+		offset=vc0*y+vc1*u;
+		vpred=(prevv+offset)>>2;
+		CLAMP2(vpred, -128, 127);
+		info=rCDF2syms[2<<PROBBITS|(state&((1<<PROBBITS)-1))];
+		v=(int8_t)(info+vpred-128);
+		prevv=4*v-offset;
+#ifdef ANS_VAL
+		ansval_check(&state, sizeof(state), 1);
+#endif
+		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
+		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
+		{
+#ifdef _DEBUG
+			if(streamptr>streamend)
+				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
+#endif
+			state=state<<16|*(uint16_t*)streamptr;
+			streamptr+=2;
+		}
+		ptr[yidx]=y+128;
+		ptr[uidx]=u+128;
+		ptr[vidx]=v+128;
+		ptr+=bytestride;
+	}
+	*pstreamptr=streamptr;
+	*pstate=state;
+#ifndef _DEBUG
+	(void)streamend;
+#endif
+}
+#if 0
+static void decode1d_deprecated(uint8_t *data, int count, int bytestride, int bestrct, unsigned *pstate, const uint8_t **pstreamptr, const uint8_t *streamend, unsigned *rCDF2syms)
 {
 	const uint8_t *combination=rct_combinations[bestrct];
 	int yidx=combination[II_PERM_Y];
@@ -1582,5 +1894,6 @@ static void decode1d(uint8_t *data, int count, int bytestride, int bestrct, unsi
 #endif
 }
 #endif
+#endif//COMMON_rANS
 
 #endif//INC_COMMON_H

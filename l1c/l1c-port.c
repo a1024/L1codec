@@ -36,8 +36,8 @@ enum
 	YCODERS=4,
 	NLANES=XCODERS*YCODERS,
 
-	ANALYSIS_XSTRIDE=4,
-	ANALYSIS_YSTRIDE=4,
+	ANALYSIS_XSTRIDE=5,
+	ANALYSIS_YSTRIDE=5,
 
 	DEFAULT_EFFORT_LEVEL=1,
 #ifdef MIX5
@@ -550,6 +550,50 @@ static void interleave_blocks_inv(const uint8_t *interleaved, int iw, int ih, ui
 }
 int codec_l1_port(int argc, char **argv)
 {
+	static const int16_t tag='L'|'1'<<8;
+	const char *srcfn=0, *dstfn=0;
+	FILE *fsrc=0;
+	int c=0;
+	int param1=0, dist=0, effort=0, profile=0;
+	int yidx=0, uidx=0, vidx=0;
+	int uc0=0, vc0=0, vc1=0;
+	int fwd=0, iw=0, ih=0, rowstride=0;
+	RCTInfo rct={0};
+	int npreds=0, sh=0;
+	uint64_t bypassmask=0;//0: emit stats  1: rare context (bypass)
+	ptrdiff_t usize=0, cap=0;
+	uint8_t *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
+	int psize=0;
+	int16_t *pixels=0;
+	ptrdiff_t cheadersize=0, csize=0;
+	int blockw=0, blockh=0;
+	int qxbytes=0, ixcount=0, ixbytes=0;//ix = interleaved circular buffer width
+	int xremw=0, yremh=0, xrembytes=0;
+	int nctx=0;
+	ptrdiff_t isize=0, interleavedsize=0;//fwd ? interleave residuals & context : pack residuals
+	uint8_t *interleaved=0;
+	int hsize=0;
+	int *hists=0;
+	int CDF2syms_size=0;
+	uint32_t *CDF2syms=0;
+	static const int ctsize=(int)sizeof(int16_t[512<<GRBITS]);
+	int16_t *ctable=0;
+	int L1statesize=0;
+	int *L1state=0;
+	int16_t myuv[3*NLANES]={0};
+	int dist_rcp=0;
+	uint8_t *ctxptr=0;
+	uint32_t mstate[NLANES]={0};
+	int16_t *L1preds=0;
+	int *L1weights=0;
+#ifdef ESTIMATE_SIZE
+	double esize[3*NLANES]={0};
+#endif
+#ifdef LOUD
+	double t=0;
+	ptrdiff_t usize2=0;
+#endif
+
 	if(argc!=3&&argc!=4&&argc!=5)
 	{
 		printf(
@@ -562,17 +606,16 @@ int codec_l1_port(int argc, char **argv)
 		);
 		return 1;
 	}
-	const char *srcfn=argv[1], *dstfn=argv[2];
-	int param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]), dist=argc<5?1:atoi(argv[4]);
-	int effort=param1&3, profile=param1>>2;
+	srcfn=argv[1];
+	dstfn=argv[2];
+	param1=argc<4?DEFAULT_EFFORT_LEVEL:atoi(argv[3]);
+	dist=argc<5?1:atoi(argv[4]);
+	effort=param1&3;
+	profile=param1>>2;
 	if(dist>1)
 		CLAMP2(dist, 3, 31);
-#ifdef ESTIMATE_SIZE
-	double esize[3*NLANES]={0};
-#endif
 #ifdef LOUD
-	double t=time_sec();
-	ptrdiff_t usize2=0;
+	t=time_sec();
 	{
 		struct stat info={0};
 		stat(srcfn, &info);
@@ -580,143 +623,128 @@ int codec_l1_port(int argc, char **argv)
 	}
 #endif
 	prof_timestamp=time_sec();
-	//prof_checkpoint(0, 0);
 	if(!srcfn||!dstfn)
 	{
 		CRASH("Codec requires both source and destination filenames");
 		return 1;
 	}
-	int fwd=0, iw=0, ih=0, rowstride=0;
-	int bestrct=0, npreds=0, sh=0;
-	uint64_t bypassmask=0;//0: emit stats  1: rare context (bypass)
-	ptrdiff_t usize=0, cap=0;
-	uint8_t *image=0, *imptr=0, *streamptr=0, *streamstart=0, *streamend=0;
-	int psize=0;
-	int16_t *pixels=0;
-	ptrdiff_t cheadersize=0, csize=0;
+	fsrc=fopen(srcfn, "rb");
+	if(!fsrc)
 	{
-		FILE *fsrc=fopen(srcfn, "rb");
-		if(!fsrc)
-		{
-			CRASH("Cannot open \"%s\"", srcfn);
-			return 1;
-		}
-		int c=0;
-		fread(&c, 1, 2, fsrc);
-		fwd=c==('P'|'6'<<8);
-		if(!fwd&&c!=('L'|'1'<<8))
-		{
-			CRASH("Unsupported file \"%s\"", srcfn);
-			return 1;
-		}
-		if(fwd)
-		{
-			int nread=0, vmax=0;
-#ifdef LOUD
-			print_timestamp("%Y-%m-%d_%H%M%S\n");
-#endif
-			c=fgetc(fsrc);
-			if(c!='\n')
-			{
-				CRASH("Invalid PPM file");
-				return 1;
-			}
-			nread=fscanf(fsrc, "%d %d", &iw, &ih);
-			if(nread!=2)
-			{
-				CRASH("Unsupported PPM file");
-				return 1;
-			}
-			nread=fscanf(fsrc, "%d", &vmax);
-			if(nread!=1||vmax!=255)
-			{
-				CRASH("Unsupported PPM file");
-				return 1;
-			}
-			c=fgetc(fsrc);
-			if(c!='\n')
-			{
-				CRASH("Invalid PPM file");
-				return 1;
-			}
-		}
-		else
-		{
-			int flags=0;
-
-			iw=0;
-			ih=0;
-			dist=0;
-			fread(&iw, 1, 3, fsrc);
-			fread(&ih, 1, 3, fsrc);
-			fread(&flags, 1, 1, fsrc);
-			bestrct=flags>>2;
-			effort=flags&3;
-			fread(&dist, 1, 1, fsrc);
-			fread(&bypassmask, 1, 8, fsrc);
-			cheadersize=ftell(fsrc);
-		}
-		if(iw<1||ih<1)
-		{
-			CRASH("Unsupported source file");
-			return 1;
-		}
-		rowstride=3*iw;
-		usize=(ptrdiff_t)3*iw*ih;
-		cap=(ptrdiff_t)4*iw*ih;
-		image=(uint8_t*)malloc(cap+sizeof(uint8_t[32]));
-		if(!image)
-		{
-			CRASH("Alloc error");
-			return 1;
-		}
-		if(fwd)
-		{
-			fread(image, 1, usize, fsrc);//read image
-			streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
-			profile_size(streamptr, "start");
-		}
-		else
-		{
-			struct stat info={0};
-			stat(srcfn, &info);
-			csize=info.st_size;
-			streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(uint8_t[32]);
-			streamend=image+cap-sizeof(uint8_t[32]);
-			fread(streamstart, 1, csize-cheadersize, fsrc);//read stream
-		}
-		fclose(fsrc);
+		CRASH("Cannot open \"%s\"", srcfn);
+		return 1;
 	}
+	fread(&c, 1, 2, fsrc);
+	fwd=c==('P'|'6'<<8);
+	if(!fwd&&c!=tag)
+	{
+		CRASH("Unsupported file \"%s\"", srcfn);
+		return 1;
+	}
+	if(fwd)
+	{
+		int nread=0, vmax=0;
+#ifdef LOUD
+		print_timestamp("%Y-%m-%d_%H%M%S\n");
+#endif
+		c=fgetc(fsrc);
+		if(c!='\n')
+		{
+			CRASH("Invalid PPM file");
+			return 1;
+		}
+		nread=fscanf(fsrc, "%d %d", &iw, &ih);
+		if(nread!=2)
+		{
+			CRASH("Unsupported PPM file");
+			return 1;
+		}
+		nread=fscanf(fsrc, "%d", &vmax);
+		if(nread!=1||vmax!=255)
+		{
+			CRASH("Unsupported PPM file");
+			return 1;
+		}
+		c=fgetc(fsrc);
+		if(c!='\n')
+		{
+			CRASH("Invalid PPM file");
+			return 1;
+		}
+	}
+	else
+	{
+		iw=0;
+		ih=0;
+		dist=0;
+		fread(&iw, 1, 3, fsrc);
+		fread(&ih, 1, 3, fsrc);
+		fread(&effort, 1, 1, fsrc);
+		fread(&rct, 1, sizeof(rct), fsrc);
+		fread(&dist, 1, 1, fsrc);
+		fread(&bypassmask, 1, 8, fsrc);
+		cheadersize=ftell(fsrc);
+	}
+	if(iw<1||ih<1)
+	{
+		CRASH("Unsupported source file");
+		return 1;
+	}
+	rowstride=3*iw;
+	usize=(ptrdiff_t)3*iw*ih;
+	cap=(ptrdiff_t)4*iw*ih;
+	image=(uint8_t*)malloc(cap+sizeof(uint8_t[32]));
+	if(!image)
+	{
+		CRASH("Alloc error");
+		return 1;
+	}
+	if(fwd)
+	{
+		fread(image, 1, usize, fsrc);//read image
+		streamptr=streamstart=image+cap;//bwd-bwd ANS encoding
+		profile_size(streamptr, "start");
+	}
+	else
+	{
+		struct stat info={0};
+		stat(srcfn, &info);
+		csize=info.st_size;
+		streamptr=streamstart=image+cap-(csize-cheadersize)-sizeof(uint8_t[32]);
+		streamend=image+cap-sizeof(uint8_t[32]);
+		fread(streamstart, 1, csize-cheadersize, fsrc);//read stream
+	}
+	fclose(fsrc);
 	prof_checkpoint(fwd?usize:csize, "fread");
-	int blockw=iw/XCODERS;
-	int blockh=ih/YCODERS;
-	int qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
-	int ixcount=blockw*NLANES, ixbytes=3*ixcount;//ix = interleaved circular buffer width		iw/XCODERS*NLANES
-	int xremw=iw-blockw*XCODERS, yremh=ih-blockh*YCODERS;
-	int xrembytes=3*xremw;
-	int nctx=3*NCTX+3*(xremw||yremh);
-	ptrdiff_t isize=(ptrdiff_t)ixbytes*blockh;
-	ptrdiff_t interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
-	uint8_t *interleaved=(uint8_t*)malloc(interleavedsize);
+	blockw=iw/XCODERS;
+	blockh=ih/YCODERS;
+	qxbytes=blockw*XCODERS*3;//iw/XCODERS*XCODERS*3
+	ixcount=blockw*NLANES;//ix = interleaved circular buffer width	iw/XCODERS*NLANES
+	ixbytes=3*ixcount;
+	xremw=iw-blockw*XCODERS;
+	yremh=ih-blockh*YCODERS;
+	xrembytes=3*xremw;
+	nctx=3*NCTX+3*(xremw||yremh);
+	isize=(ptrdiff_t)ixbytes*blockh;
+	interleavedsize=isize<<fwd;//fwd ? interleave residuals & context : pack residuals
+	interleaved=(uint8_t*)malloc(interleavedsize);
 	if(!interleaved)
 	{
 		CRASH("Alloc error");
 		return 1;
 	}
-	(void)xrembytes;
-	const int hsize=nctx*(int)sizeof(int[256]);
-	int *hists=fwd?(int*)malloc(hsize):0;//fwd-only
+	hsize=nctx*(int)sizeof(int[256]);
+	hists=fwd?(int*)malloc(hsize):0;//fwd-only
 
-	int CDF2syms_size=nctx*(int)sizeof(int[1<<PROBBITS]);
+	CDF2syms_size=nctx*(int)sizeof(int[1<<PROBBITS]);
 	if(fwd)//DIV-free rANS encoder reuses this as SIMD symbol info
 		CDF2syms_size=nctx*(int)sizeof(rANS_SIMD_SymInfo[256]);
-	uint32_t *CDF2syms=(uint32_t*)malloc(CDF2syms_size);
+	CDF2syms=(uint32_t*)malloc(CDF2syms_size);
 
 	psize=(blockw+2*XPAD)*(int)sizeof(int16_t[NROWS*NVAL]);//int16_t[blockw+2*XPAD][NROWS*NVAL]
 	pixels=(int16_t*)malloc(psize);
 
-	int ctsize=(int)sizeof(int16_t[512<<GRBITS]);
-	int16_t *ctable=(int16_t*)malloc(ctsize);
+	ctable=(int16_t*)malloc(ctsize);
 	if((fwd&&!hists)||!CDF2syms||!pixels||!ctable)
 	{
 		CRASH("Alloc error");
@@ -791,10 +819,36 @@ int codec_l1_port(int argc, char **argv)
 						counters[OCH_YX00]+=abs(r);
 						counters[OCH_Y0X0]+=abs(g);
 						counters[OCH_Y00X]+=abs(b);
+						counters[OCH_CX10]+=abs(r-(g>>2));
+						counters[OCH_C0X1]+=abs(g-(b>>2));
+						counters[OCH_C10X]+=abs(b-(r>>2));
+						counters[OCH_C1X0]+=abs(g-(r>>2));
+						counters[OCH_C01X]+=abs(b-(g>>2));
+						counters[OCH_CX01]+=abs(r-(b>>2));
+						counters[OCH_CX20]+=abs(r-(g>>1));
+						counters[OCH_C0X2]+=abs(g-(b>>1));
+						counters[OCH_C20X]+=abs(b-(r>>1));
+						counters[OCH_C2X0]+=abs(g-(r>>1));
+						counters[OCH_C02X]+=abs(b-(g>>1));
+						counters[OCH_CX02]+=abs(r-(b>>1));
+						counters[OCH_CX30]+=abs(r-(g*3>>2));
+						counters[OCH_C0X3]+=abs(g-(b*3>>2));
+						counters[OCH_C30X]+=abs(b-(r*3>>2));
+						counters[OCH_C3X0]+=abs(g-(r*3>>2));
+						counters[OCH_C03X]+=abs(b-(g*3>>2));
+						counters[OCH_CX03]+=abs(r-(b*3>>2));
 						counters[OCH_CX40]+=abs(rg);
 						counters[OCH_C0X4]+=abs(gb);
 						counters[OCH_C40X]+=abs(br);
-#ifdef ENABLE_RCT_EXTENSION
+						counters[OCH_CX11]+=abs(r-((g+b)>>2));
+						counters[OCH_C1X1]+=abs(g-((b+r)>>2));
+						counters[OCH_C11X]+=abs(b-((r+g)>>2));
+						counters[OCH_CX21]+=abs(r-((2*g+b)>>2));
+						counters[OCH_C2X1]+=abs(g-((2*r+b)>>2));
+						counters[OCH_C21X]+=abs(b-((2*r+g)>>2));
+						counters[OCH_CX12]+=abs(r-((2*b+g)>>2));
+						counters[OCH_C1X2]+=abs(g-((2*b+r)>>2));
+						counters[OCH_C12X]+=abs(b-((2*g+r)>>2));
 						counters[OCH_CX31]+=abs(rg+(gb>>2));//r-(3*g+b)/4 = r-g-(b-g)/4
 						counters[OCH_C3X1]+=abs(rg+(br>>2));//g-(3*r+b)/4 = g-r-(b-r)/4
 						counters[OCH_C31X]+=abs(br+(rg>>2));//b-(3*r+g)/4 = b-r-(g-r)/4
@@ -804,42 +858,12 @@ int codec_l1_port(int argc, char **argv)
 						counters[OCH_CX22]+=abs((rg-br)>>1);//r-(g+b)/2 = (r-g + r-b)/2
 						counters[OCH_C2X2]+=abs((gb-rg)>>1);//g-(r+b)/2 = (g-r + g-b)/2
 						counters[OCH_C22X]+=abs((br-gb)>>1);//b-(r+g)/2 = (b-r + b-g)/2
-#endif
 					}
 					imptr+=3*NLANES*ANALYSIS_XSTRIDE;
 				}
 				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
-			{
-				int64_t minerr;
-				int kt;
-
-				for(kt=0, minerr=0;kt<RCT_COUNT;++kt)
-				{
-					const uint8_t *rct=rct_combinations[kt];
-					int64_t currerr=
-						+counters[rct[0]]
-						+counters[rct[1]]
-						+counters[rct[2]]
-					;
-#ifdef LOUD
-					printf("%2d  %-14s %12lld + %12lld + %12lld = %12lld%s\n"
-						, kt
-						, rct_names[kt]
-						, counters[rct[0]]
-						, counters[rct[1]]
-						, counters[rct[2]]
-						, currerr
-						, !kt||minerr>currerr?" <-":""
-					);
-#endif
-					if(!kt||minerr>currerr)
-					{
-						minerr=currerr;
-						bestrct=kt;
-					}
-				}
-			}
+			crct_select(counters, &rct);
 			prof_checkpoint(usize, "analysis");
 		}
 	}
@@ -853,8 +877,6 @@ int codec_l1_port(int argc, char **argv)
 		streamptr=(uint8_t*)(size_t)ec.srcfwdptr;
 		prof_checkpoint(CDF2syms_size, "unpack histograms");
 	}
-	int L1statesize=0;
-	int *L1state=0;
 	switch(effort)
 	{
 	case 0://use CG
@@ -878,7 +900,16 @@ int codec_l1_port(int argc, char **argv)
 #ifndef LOUD
 		if(profile)
 #endif
-			printf("%s  NPREDS=%d  %td bytes\n", rct_names[bestrct], npreds, usize);
+			printf("NPREDS=%d  RCT[%d%d%d %d %d%d]  %td bytes\n"
+				, npreds
+				, rct.perm[0]
+				, rct.perm[1]
+				, rct.perm[2]
+				, rct.vc1
+				, rct.vc0
+				, rct.vc1
+				, usize
+			);
 	}
 	if(effort)
 	{
@@ -891,45 +922,23 @@ int codec_l1_port(int argc, char **argv)
 		}
 		memset(L1state, 0, L1statesize);
 	}
-	const uint8_t *combination=rct_combinations[bestrct];
-	int
-		yidx=combination[II_PERM_Y]*NLANES,
-		uidx=combination[II_PERM_U]*NLANES,
-		vidx=combination[II_PERM_V]*NLANES;
-	int uhelpmask=-(combination[II_COEFF_U_SUB_Y]!=0);
-	int vc0=combination[II_COEFF_V_SUB_Y];
-	int vc1=combination[II_COEFF_V_SUB_U];
-	//int paddedwidth=blockw+2*XPAD;
+	yidx=rct.perm[0]*NLANES;
+	uidx=rct.perm[1]*NLANES;
+	vidx=rct.perm[2]*NLANES;
+	uc0=rct.uc0;
+	vc0=rct.vc0;
+	vc1=rct.vc1;
 	memset(pixels, 0, psize);
-	int16_t myuv[3*NLANES];
-	int dist_rcp=0x10000;
+	dist_rcp=0x10000;
 	if(dist>1)
 		dist_rcp=((1<<16)+dist-1)/dist;//x/dist  ->  {x*=inv; x=(x>>16)+((uint32_t)x>>31);}
 	memset(myuv, 0, sizeof(myuv));
-	uint8_t *ctxptr=interleaved;
+	ctxptr=interleaved;
 	imptr=interleaved+(fwd?isize:0);
-	uint32_t mstate[NLANES];
-	int16_t *L1preds=effort?(int16_t*)L1state:0;
-	int *L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NLANES*3*(L1_NPREDS3+1)):0;
+	L1preds=effort?(int16_t*)L1state:0;
+	L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NLANES*3*(L1_NPREDS3+1)):0;
 	if(effort)
 		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[6*8]), sizeof(int));
-	//{
-	//	static const int weights0[]=
-	//	{
-	//		100000,//0	N
-	//		100000,//1	W
-	//		 80000,//2	3*(N-NN)+NNN
-	//		 80000,//3	3*(W-WW)+WWW
-	//		 50000,//4	W+NE-N
-	//		 50000,//5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
-	//		150000,//6	N+W-NW
-	//		 50000,//7	N+NE-NNE
-	//		0,
-	//	};
-	//	int *L1coeffs=(int*)L1weights;
-	//	for(int k=0;k<L1_NPREDS2+1;++k)
-	//		FILLMEM(L1coeffs+6*8*k, weights0[k], sizeof(int[6*8]), sizeof(int));
-	//}
 	if(!fwd)
 	{
 #ifdef _DEBUG
@@ -1284,7 +1293,7 @@ int codec_l1_port(int argc, char **argv)
 				//decorrelate U
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+0*NLANES]=myuv[k+0*NLANES]&uhelpmask;
+					moffset[k+0*NLANES]=uc0*myuv[k+0*NLANES]>>2;
 					pred[k+1*NLANES]+=moffset[k];
 					CLAMP2(pred[k+1*NLANES], -128, 127);
 					msyms[k+1*NLANES]=myuv[k+1*NLANES]-pred[k+1*NLANES];
@@ -1408,7 +1417,7 @@ int codec_l1_port(int argc, char **argv)
 				//reconstruct U
 				for(int k=0;k<NLANES;++k)
 				{
-					moffset[k+0*NLANES]=myuv[k+0*NLANES]&uhelpmask;
+					moffset[k+0*NLANES]=uc0*myuv[k+0*NLANES]>>2;
 					pred[k+1*NLANES]+=moffset[k+0*NLANES];
 					CLAMP2(pred[k+1*NLANES], -128, 127);
 				}
@@ -1580,9 +1589,9 @@ int codec_l1_port(int argc, char **argv)
 		if(xremw||yremh)
 		{
 			for(int ky=0;ky<yremh;++ky)
-				decorr1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, rhist);
+				decorr1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &rct, rhist);
 			for(int kx=0;kx<xremw;++kx)
-				decorr1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, rhist);
+				decorr1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &rct, rhist);
 		}
 
 		//normalize/integrate hists
@@ -1718,13 +1727,11 @@ int codec_l1_port(int argc, char **argv)
 				CRASH("Cannot open \"%s\" for writing", fdst);
 				return 1;
 			}
-			csize2+=fwrite("L1", 1, 2, fdst);
+			csize2+=fwrite(&tag, 1, sizeof(tag), fdst);
 			csize2+=fwrite(&iw, 1, 3, fdst);
 			csize2+=fwrite(&ih, 1, 3, fdst);
-			{
-				int flags=bestrct<<2|(effort&3);
-				csize2+=fwrite(&flags, 1, 1, fdst);
-			}
+			csize2+=fwrite(&effort, 1, 1, fdst);
+			csize2+=fwrite(&rct, 1, sizeof(rct), fdst);
 			csize2+=fwrite(&dist, 1, 1, fdst);
 			csize2+=fwrite(&bypassmask, 1, 8, fdst);
 #ifdef _DEBUG
@@ -1748,11 +1755,15 @@ int codec_l1_port(int argc, char **argv)
 			printf("Total estimate  %12.2lf bytes\n", etotal);
 #endif
 #ifdef LOUD
-			printf("L1C Port WH %d*%d  RCT %2d %s  effort %d  dist %3d  \"%s\"\n"
+			printf("L1C Port WH %d*%d  RCT[%d%d%d %d %d%d]  effort %d  dist %3d  \"%s\"\n"
 				, iw
 				, ih
-				, bestrct
-				, rct_names[bestrct]
+				, rct.perm[0]
+				, rct.perm[1]
+				, rct.perm[2]
+				, rct.uc0
+				, rct.vc0
+				, rct.vc1
 				, effort
 				, dist
 				, srcfn
@@ -1780,9 +1791,9 @@ int codec_l1_port(int argc, char **argv)
 			uint32_t state=*(uint32_t*)streamptr;
 			streamptr+=4;
 			for(int ky=0;ky<yremh;++ky)
-				decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, bestrct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
+				decode1d(image+rowstride*(blockh*YCODERS+ky), iw, 3, &rct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
 			for(int kx=0;kx<xremw;++kx)
-				decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, bestrct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
+				decode1d(image+qxbytes+3*kx, blockh*YCODERS, rowstride, &rct, &state, (const uint8_t**)&streamptr, streamend, rCDF2syms);
 			prof_checkpoint(usize-isize, "remainder");
 		}
 
@@ -1806,10 +1817,11 @@ int codec_l1_port(int argc, char **argv)
 #endif
 		prof_print(usize);
 #endif
+	(void)xrembytes;
 	(void)och_names;
 	(void)rct_names;
-	(void)print_timestamp;
-	(void)encode1d_sse41;
-	(void)encode1d;
+	(void)&print_timestamp;
+	(void)&encode1d_sse41;
+	(void)&encode1d;
 	return 0;
 }
