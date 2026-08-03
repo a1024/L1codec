@@ -97,4 +97,4 @@ CPU: Intel i7-13700KF.
 107 images, 3,462,571,880 bytes.
 CPU: Intel i7-13700KF.
 
-<img src="20260803-4-LPCB-i7-13700KF.svg">
+<img src="20260803-5-LPCB-i7-13700KF.svg">
