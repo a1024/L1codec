@@ -92,9 +92,16 @@ CPU: Intel i7-13700KF.
 
 <img src="20260803-2-DIV2K-i7-13700KF.svg">
 
-### Dataset: Lossless Photo COmpression Benchmark (LPCB)
+### Dataset: Lossless Photo Compression Benchmark (LPCB)
 
 107 images, 3,462,571,880 bytes.
 CPU: Intel i7-13700KF.
 
 <img src="20260803-5-LPCB-i7-13700KF.svg">
+
+### Dataset: FiveK-128
+
+A subset of the first 128 images exported to PPM, 3,874,676,806 bytes.
+CPU: Intel i7-13700KF.
+
+<img src="20260803-6-FiveK128-i7-13700KF.svg">
