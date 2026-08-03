@@ -843,9 +843,10 @@ int codec_l1_avx512(int argc, char **argv)
 			__m512i wordmask=_mm512_set1_epi64(0xFFFF);
 
 			memset(mcounters, 0, sizeof(mcounters));
-			imptr=interleaved+isize+ixbytes+3*NCODERS;
+			//imptr=interleaved+isize+ixbytes+3*NCODERS;
 			for(int ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
+				imptr=interleaved+isize+ky*ixbytes+3*NCODERS;
 				for(int kx=1;kx<blockw-ANALYSIS_XSTRIDE;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m512i r0=_mm512_cvtepi8_epi16(_mm256_add_epi8(_mm256_load_si256((__m256i*)imptr+0), half8));
@@ -1023,7 +1024,7 @@ int codec_l1_avx512(int argc, char **argv)
 					);
 #undef  UPDATE
 				}
-				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
+				//imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 			for(int k=0;k<OCH_COUNT;++k)
 			{

@@ -14,9 +14,9 @@
 
 
 //	#define CODEC codec_l1_port
-//	#define CODEC codec_l1_ssse3
+	#define CODEC codec_l1_ssse3
 //	#define CODEC codec_l1_sse41
-	#define CODEC codec_l1_avx2
+//	#define CODEC codec_l1_avx2
 //	#define CODEC codec_l1_avx512
 
 
@@ -28,14 +28,14 @@ int codec_l1_avx512(int argc, char **argv);
 int main(int argc, char **argv)
 {
 	const char *dstfn=//OVERWRITTEN
-		"C:/dataset-a-temp/zzz.ppm"
-	//	"C:/Projects/datasets/zzz.ppm"
+	//	"C:/dataset-a-temp/zzz.ppm"
+		"C:/Projects/datasets/zzz.ppm"
 	//	"D:/ML/zzz.ppm"
 	//	"F:/Projects/zzz.ppm"
 	;
 	const char *tmpfn=//OVERWRITTEN
-		"C:/dataset-a-temp/zzz.l1c"
-	//	"C:/Projects/datasets/zzz.l1c"
+	//	"C:/dataset-a-temp/zzz.l1c"
+		"C:/Projects/datasets/zzz.l1c"
 	//	"D:/ML/zzz.l1c"
 	//	"F:/Projects/zzz.l1c"
 	;
@@ -84,7 +84,7 @@ int main(int argc, char **argv)
 	//	"C:/dataset-HUGE-ppm/jwst.ppm"
 	//	"C:/dataset-HUGE-ppm/kodak.PPM"
 	//	"C:/dataset-HUGE-ppm/space_huge.ppm"
-		"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
+	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"
 	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_02.ppm"
 	//	"C:/dataset-LPCB-ppm/canon_eos_1100d_11.ppm"
 	//	"C:/dataset-LPCB-ppm/fujifilm_finepix_x100_01.ppm"
@@ -132,6 +132,7 @@ int main(int argc, char **argv)
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/astro-01.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-01.ppm"
+		"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-05.ppm"
 	//	"C:/Projects/datasets/dataset-GDCC2020-ppm/photo-06.ppm"
 	//	"C:/Projects/datasets/dataset-kodak-ppm/kodim23.ppm"
 	//	"C:/Projects/datasets/dataset-LPCB-ppm/canon_eos_1100d_01.ppm"

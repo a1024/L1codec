@@ -1007,10 +1007,11 @@ int codec_l1_avx2(int argc, char **argv)
 			__m128i half8=_mm_set1_epi8(-128);
 			__m256i wordmask=_mm256_set1_epi64x(0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
-			imptr=interleaved+isize;
+			//imptr=interleaved+isize;
 			for(int ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
-				for(int kx=1;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				imptr=interleaved+isize+ky*ixbytes+3*NCODERS;
+				for(int kx=1;kx<blockw-ANALYSIS_XSTRIDE;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m256i r=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)imptr+0), half8));
 					__m256i g=_mm256_cvtepi8_epi16(_mm_add_epi8(_mm_load_si128((__m128i*)imptr+1), half8));
@@ -1133,7 +1134,7 @@ int codec_l1_avx2(int argc, char **argv)
 					);
 #undef  UPDATE
 				}
-				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
+				//imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 			for(int k=0;k<OCH_COUNT;++k)
 			{

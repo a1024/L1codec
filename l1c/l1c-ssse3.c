@@ -1085,12 +1085,11 @@ int codec_l1_ssse3(int argc, char **argv)
 			__m128i half8=_mm_set1_epi8(-128);
 			__m128i wordmask=_mm_set_epi32(0, 0xFFFF, 0, 0xFFFF);
 			memset(mcounters, 0, sizeof(mcounters));
-			imptr=interleaved+isize+ixbytes+3*NCODERS;
+			//imptr=interleaved+isize+ixbytes+3*NCODERS;
 			for(ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
-				__m128i prev[OCH_COUNT][2];//16-bit
-				memset(prev, 0, sizeof(prev));
-				for(kx=1;kx<blockw-1;kx+=ANALYSIS_XSTRIDE)
+				imptr=interleaved+isize+ky*ixbytes+3*NCODERS;
+				for(kx=1;kx<blockw-ANALYSIS_XSTRIDE;kx+=ANALYSIS_XSTRIDE)
 				{
 					__m128i rg0, gb0, br0;
 					__m128i rg1, gb1, br1;
@@ -1299,7 +1298,7 @@ int codec_l1_ssse3(int argc, char **argv)
 					);
 #undef  UPDATE
 				}
-				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
+				//imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 			{
 				int k;

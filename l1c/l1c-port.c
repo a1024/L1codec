@@ -801,10 +801,11 @@ int codec_l1_port(int argc, char **argv)
 		prof_checkpoint(usize, "interleave");
 		{//analysis
 			ALIGN(32) int64_t counters[OCH_COUNT]={0};
-			imptr=interleaved+isize+ixbytes+3*NLANES;
+			//imptr=interleaved+isize+ixbytes+3*NLANES;
 			for(int ky=1;ky<blockh;ky+=ANALYSIS_YSTRIDE)
 			{
-				for(int kx=1;kx<blockw-(ANALYSIS_XSTRIDE-1);kx+=ANALYSIS_XSTRIDE)
+				imptr=interleaved+isize+ky*ixbytes+3*NLANES;
+				for(int kx=1;kx<blockw-ANALYSIS_XSTRIDE;kx+=ANALYSIS_XSTRIDE)
 				{
 					for(int k=0;k<16;++k)
 					{
@@ -861,7 +862,7 @@ int codec_l1_port(int argc, char **argv)
 					}
 					imptr+=3*NLANES*ANALYSIS_XSTRIDE;
 				}
-				imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
+				//imptr+=ixbytes*(ANALYSIS_YSTRIDE-1);
 			}
 			crct_select(counters, &rct);
 			prof_checkpoint(usize, "analysis");
