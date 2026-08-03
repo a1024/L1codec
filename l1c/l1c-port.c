@@ -874,7 +874,7 @@ int codec_l1_port(int argc, char **argv)
 		bitpacker_dec_init(&ec, streamptr, streamend);
 		for(int kc=0;kc<nctx;++kc)
 			dec_unpackhist(&ec, CDF2syms+((ptrdiff_t)kc<<PROBBITS), bypassmask, kc);
-		streamptr=(uint8_t*)(size_t)ec.srcfwdptr;
+		streamptr=(uint8_t*)(size_t)ec.ptr;
 		prof_checkpoint(CDF2syms_size, "unpack histograms");
 	}
 	switch(effort)
@@ -1712,8 +1712,7 @@ int codec_l1_port(int argc, char **argv)
 			bitpacker_enc_init(&ec, image, streamptr);
 			for(int kc=nctx-1;kc>=0;--kc)
 				enc_packhist(&ec, hists+(ptrdiff_t)256*kc, bypassmask, kc);
-			bitpacker_enc_flush(&ec);
-			streamptr=ec.dstbwdptr;
+			streamptr=bitpacker_enc_flush(&ec);
 		}
 		prof_checkpoint((ptrdiff_t)nctx*256, "pack histograms");
 		profile_size(streamptr, "/ %9d bytes overhead", nctx*PROBBITS<<8>>3);
@@ -1818,8 +1817,6 @@ int codec_l1_port(int argc, char **argv)
 		prof_print(usize);
 #endif
 	(void)xrembytes;
-	(void)och_names;
-	(void)rct_names;
 	(void)&print_timestamp;
 	(void)&encode1d_sse41;
 	(void)&encode1d;

@@ -1168,7 +1168,7 @@ int codec_l1_avx2(int argc, char **argv)
 		bitpacker_dec_init(&ec, streamptr, streamend);
 		for(int kc=0;kc<nctx;++kc)
 			dec_unpackhist(&ec, CDF2syms+((ptrdiff_t)kc<<PROBBITS), bypassmask, kc);
-		streamptr=(uint8_t*)(size_t)ec.srcfwdptr;
+		streamptr=(uint8_t*)(size_t)ec.ptr;
 		prof_checkpoint(CDF2syms_size, "unpack histograms");
 
 		//generate decode permutations		eg: mask = MSB 0b11000101 LSB  ->  LO {0, x, 1, x, x, x, 2, 3} HI
@@ -1291,23 +1291,6 @@ int codec_l1_avx2(int argc, char **argv)
 	L1weights=effort?(int*)(L1state+1*(ptrdiff_t)NCODERS*3*(L1_NPREDS3+1)):0;
 	if(effort)
 		FILLMEM(L1weights, (1<<sh)/npreds, (npreds+1)*sizeof(int[6*8]), sizeof(int));
-	//{
-	//	static const int weights0[]=
-	//	{
-	//		100000,//0	N
-	//		100000,//1	W
-	//		 80000,//2	3*(N-NN)+NNN
-	//		 80000,//3	3*(W-WW)+WWW
-	//		 50000,//4	W+NE-N
-	//		 50000,//5	(WWWW+WWW+NNN+NEE+NEEE+NEEEE-2*NW)/4
-	//		150000,//6	N+W-NW
-	//		 50000,//7	N+NE-NNE
-	//		0,
-	//	};
-	//	int *L1coeffs=(int*)L1weights;
-	//	for(int k=0;k<L1_NPREDS2+1;++k)
-	//		FILLMEM(L1coeffs+6*8*k, weights0[k], sizeof(int[6*8]), sizeof(int));
-	//}
 #ifdef GATHER_CTX
 	for(int k=0;k<_countof(ctxtable);++k)
 	{
@@ -2918,8 +2901,7 @@ int codec_l1_avx2(int argc, char **argv)
 			bitpacker_enc_init(&ec, image, streamptr);
 			for(int kc=nctx-1;kc>=0;--kc)
 				enc_packhist(&ec, hists+(ptrdiff_t)256*kc, bypassmask, kc);
-			bitpacker_enc_flush(&ec);
-			streamptr=ec.dstbwdptr;
+			streamptr=bitpacker_enc_flush(&ec);
 		}
 		prof_checkpoint((ptrdiff_t)nctx*256, "pack histograms");
 		profile_size(streamptr, "/ %9d bytes overhead", nctx*PROBBITS<<8>>3);
@@ -3063,8 +3045,6 @@ int codec_l1_avx2(int argc, char **argv)
 		prof_print(usize);
 #endif
 	(void)xrembytes;
-	(void)och_names;
-	(void)rct_names;
 	(void)&print_timestamp;
 	(void)&encode1d_port;
 	(void)&encode1d_sse41;

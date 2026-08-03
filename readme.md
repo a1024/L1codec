@@ -52,7 +52,8 @@ All tests are single-threaded.
 
 ### Dataset: GDCC 2020 (100 images)
 
-CPU: Intel i5-1145G7
+100 images. 1,000,452,004 bytes.
+CPU: Intel i5-1145G7.
 
 | size       | Enc sec    | Dec sec  | Enc MB/s   | Dec MB/s | Enc Max Mem MB | Dec Max Mem MB | Codec |
 |-----------:|-----------:|---------:|-----------:|---------:|---------------:|---------------:|-------|
@@ -84,8 +85,16 @@ CPU: Intel i5-1145G7
 
 <img src="20260803-1-GDCC-i5-1145G7.svg">
 
-### Dataset: DIV2K Validation (100 images, 850510339 bytes)
+### Dataset: DIV2K Validation
 
-CPU: Intel i7-13700KF
+100 images, 850,510,339 bytes.
+CPU: Intel i7-13700KF.
 
 <img src="20260803-2-DIV2K-i7-13700KF.svg">
+
+### Dataset: Lossless Photo COmpression Benchmark (LPCB)
+
+107 images, 3,462,571,880 bytes.
+CPU: Intel i7-13700KF.
+
+<img src="20260803-4-LPCB-i7-13700KF.svg">

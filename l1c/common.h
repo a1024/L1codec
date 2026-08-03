@@ -441,8 +441,6 @@ static void prof_print(ptrdiff_t usize)
 
 //cRCT
 #if 1
-//v3
-#if 1
 #define OCHLIST\
 	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
 \
@@ -465,40 +463,6 @@ static void prof_print(ptrdiff_t usize)
 	OCH(CX13) OCH(C1X3) OCH(C13X)\
 	OCH(CX22) OCH(C2X2) OCH(C22X)\
 
-#endif
-
-//v2
-#if 0
-#define OCHLIST\
-	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
-	OCH(CX40) OCH(C0X4) OCH(C40X)\
-	OCH(CX31) OCH(C3X1) OCH(C31X)\
-	OCH(CX13) OCH(C1X3) OCH(C13X)\
-	OCH(CX22) OCH(C2X2) OCH(C22X)\
-
-#endif
-
-//v1.5
-#if 0
-#define OCHLIST\
-	OCH(Y400) OCH(Y040) OCH(Y004)\
-	OCH(Y310) OCH(Y031) OCH(Y103)\
-	OCH(Y301) OCH(Y130) OCH(Y013)\
-	OCH(Y211) OCH(Y121) OCH(Y112)\
-	OCH(CX40) OCH(C0X4) OCH(C40X)\
-	OCH(CX31) OCH(C3X1) OCH(C31X)\
-	OCH(CX13) OCH(C1X3) OCH(C13X)\
-	OCH(CX22) OCH(C2X2) OCH(C22X)\
-
-#endif
-
-//v1
-#if 0
-#define OCHLIST\
-	OCH(YX00) OCH(Y0X0) OCH(Y00X)\
-	OCH(CX40) OCH(C0X4) OCH(C40X)\
-
-#endif
 typedef enum _OCHIndex
 {
 #define OCH(X) OCH_##X,
@@ -506,29 +470,9 @@ typedef enum _OCHIndex
 #undef  OCH
 	OCH_COUNT,
 
-	OCH_R=OCH_YX00,
-	OCH_G=OCH_Y0X0,
-	OCH_B=OCH_Y00X,
 	OCH_C4X0=OCH_CX40,
 	OCH_C04X=OCH_C0X4,
 	OCH_CX04=OCH_C40X,
-	OCH_BG=OCH_C04X,
-	OCH_BR=OCH_C40X,
-	OCH_RG=OCH_CX40,
-	OCH_RB=OCH_CX04,
-	OCH_GB=OCH_C0X4,
-	OCH_GR=OCH_C4X0,
-#ifdef ENABLE_RCT_EXTENSION
-	OCH_R1=OCH_CX13,
-	OCH_G1=OCH_C3X1,
-	OCH_B1=OCH_C13X,
-	OCH_R2=OCH_CX22,
-	OCH_G2=OCH_C2X2,
-	OCH_B2=OCH_C22X,
-	OCH_R3=OCH_CX31,
-	OCH_G3=OCH_C1X3,
-	OCH_B3=OCH_C31X,
-#endif
 } OCHIndex;
 typedef struct _RCTInfo
 {
@@ -625,201 +569,6 @@ static void crct_select(int64_t *counters, RCTInfo *ret_rct)
 	*ret_rct=rct;
 	(void)rctno;
 }
-static const char *och_names[]=
-{
-#define OCH(X) #X,
-	OCHLIST
-#undef  OCH
-};
-typedef enum _RCTInfoIdx
-{
-	II_OCH_Y,
-	II_OCH_U,
-	II_OCH_V,
-
-	II_PERM_Y,
-	II_PERM_U,
-	II_PERM_V,
-
-	II_COEFF_U_SUB_Y,
-	II_COEFF_V_SUB_Y,
-	II_COEFF_V_SUB_U,
-
-//	II_COEFF_Y_SUB_U,
-//	II_COEFF_Y_SUB_V,
-//	II_COEFF_U_SUB_V2,
-//	II_COEFF_V_SUB_U2,
-
-	II_COUNT,
-} RCTInfoIdx;
-//YUV = RCT * RGB	watch out for permutation in last row
-//luma: averaging	chroma: subtraction
-//example: _X00_40X_3X1 == [1 0 0; -1 0 1; -3/4 1 -1/4]
-#ifndef ENABLE_RCT_EXTENSION
-#define RCTLIST\
-	RCT(_X00_0X0_00X,	OCH_R,		OCH_G,		OCH_B,		0, 1, 2,	0,  0, 0)\
-	RCT(_X00_0X0_04X,	OCH_R,		OCH_G,		OCH_BG,		0, 1, 2,	0,  0, 4)\
-	RCT(_X00_0X0_40X,	OCH_R,		OCH_G,		OCH_BR,		0, 1, 2,	0,  4, 0)\
-	RCT(_0X0_00X_X40,	OCH_G,		OCH_B,		OCH_RG,		1, 2, 0,	0,  4, 0)\
-	RCT(_0X0_00X_X04,	OCH_G,		OCH_B,		OCH_RB,		1, 2, 0,	0,  0, 4)\
-	RCT(_00X_X00_4X0,	OCH_B,		OCH_R,		OCH_GR,		2, 0, 1,	0,  0, 4)\
-	RCT(_00X_X00_0X4,	OCH_B,		OCH_R,		OCH_GB,		2, 0, 1,	0,  4, 0)\
-	RCT(_0X0_04X_X40,	OCH_G,		OCH_BG,		OCH_RG,		1, 2, 0,	4,  4, 0)\
-	RCT(_0X0_04X_X04,	OCH_G,		OCH_BG,		OCH_RB,		1, 2, 0,	4,  0, 4)\
-	RCT(_0X0_X40_40X,	OCH_G,		OCH_RG,		OCH_BR,		1, 0, 2,	4,  0, 4)\
-	RCT(_00X_X04_0X4,	OCH_B,		OCH_RB,		OCH_GB,		2, 0, 1,	4,  4, 0)\
-	RCT(_00X_X04_4X0,	OCH_B,		OCH_RB,		OCH_GR,		2, 0, 1,	4,  0, 4)\
-	RCT(_00X_0X4_X40,	OCH_B,		OCH_GB,		OCH_RG,		2, 1, 0,	4,  0, 4)\
-	RCT(_X00_4X0_40X,	OCH_R,		OCH_GR,		OCH_BR,		0, 1, 2,	4,  4, 0)\
-	RCT(_X00_4X0_04X,	OCH_R,		OCH_GR,		OCH_BG,		0, 1, 2,	4,  0, 4)\
-	RCT(_X00_40X_0X4,	OCH_R,		OCH_BR,		OCH_GB,		0, 2, 1,	4,  0, 4)
-#endif
-#ifdef ENABLE_RCT_EXTENSION
-#define RCTLIST\
-	RCT(_X00_0X0_00X,	OCH_R,		OCH_G,		OCH_B,		0, 1, 2,	0,  0, 0)\
-	RCT(_X00_0X0_04X,	OCH_R,		OCH_G,		OCH_BG,		0, 1, 2,	0,  0, 4)\
-	RCT(_X00_0X0_40X,	OCH_R,		OCH_G,		OCH_BR,		0, 1, 2,	0,  4, 0)\
-	RCT(_0X0_00X_X40,	OCH_G,		OCH_B,		OCH_RG,		1, 2, 0,	0,  4, 0)\
-	RCT(_0X0_00X_X04,	OCH_G,		OCH_B,		OCH_RB,		1, 2, 0,	0,  0, 4)\
-	RCT(_00X_X00_4X0,	OCH_B,		OCH_R,		OCH_GR,		2, 0, 1,	0,  0, 4)\
-	RCT(_00X_X00_0X4,	OCH_B,		OCH_R,		OCH_GB,		2, 0, 1,	0,  4, 0)\
-\
-	RCT(_0X0_04X_X40,	OCH_G,		OCH_BG,		OCH_RG,		1, 2, 0,	4,  4, 0)\
-	RCT(_0X0_04X_X04,	OCH_G,		OCH_BG,		OCH_RB,		1, 2, 0,	4,  0, 4)\
-	RCT(_0X0_X40_40X,	OCH_G,		OCH_RG,		OCH_BR,		1, 0, 2,	4,  0, 4)\
-	RCT(_00X_X04_0X4,	OCH_B,		OCH_RB,		OCH_GB,		2, 0, 1,	4,  4, 0)\
-	RCT(_00X_X04_4X0,	OCH_B,		OCH_RB,		OCH_GR,		2, 0, 1,	4,  0, 4)\
-	RCT(_00X_0X4_X40,	OCH_B,		OCH_GB,		OCH_RG,		2, 1, 0,	4,  0, 4)\
-	RCT(_X00_4X0_40X,	OCH_R,		OCH_GR,		OCH_BR,		0, 1, 2,	4,  4, 0)\
-	RCT(_X00_4X0_04X,	OCH_R,		OCH_GR,		OCH_BG,		0, 1, 2,	4,  0, 4)\
-	RCT(_X00_40X_0X4,	OCH_R,		OCH_BR,		OCH_GB,		0, 2, 1,	4,  0, 4)\
-\
-	RCT(_0X0_03X_X40,	OCH_G,		OCH_C03X,	OCH_RG,		1, 2, 0,	3,  4, 0)\
-	RCT(_0X0_03X_X04,	OCH_G,		OCH_C03X,	OCH_RB,		1, 2, 0,	3,  0, 4)\
-	RCT(_0X0_X30_40X,	OCH_G,		OCH_CX30,	OCH_BR,		1, 0, 2,	3,  0, 4)\
-	RCT(_00X_X03_0X4,	OCH_B,		OCH_CX03,	OCH_GB,		2, 0, 1,	3,  4, 0)\
-	RCT(_00X_X03_4X0,	OCH_B,		OCH_CX03,	OCH_GR,		2, 0, 1,	3,  0, 4)\
-	RCT(_00X_0X3_X40,	OCH_B,		OCH_C0X3,	OCH_RG,		2, 1, 0,	3,  0, 4)\
-	RCT(_X00_3X0_40X,	OCH_R,		OCH_C3X0,	OCH_BR,		0, 1, 2,	3,  4, 0)\
-	RCT(_X00_3X0_04X,	OCH_R,		OCH_C3X0,	OCH_BG,		0, 1, 2,	3,  0, 4)\
-	RCT(_X00_30X_0X4,	OCH_R,		OCH_C30X,	OCH_GB,		0, 2, 1,	3,  0, 4)\
-\
-	RCT(_0X0_04X_X30,	OCH_G,		OCH_BG,		OCH_CX30,	1, 2, 0,	4,  3, 0)\
-	RCT(_0X0_04X_X03,	OCH_G,		OCH_BG,		OCH_CX03,	1, 2, 0,	4,  0, 3)\
-	RCT(_0X0_X40_30X,	OCH_G,		OCH_RG,		OCH_C30X,	1, 0, 2,	4,  0, 3)\
-	RCT(_00X_X04_0X3,	OCH_B,		OCH_RB,		OCH_C0X3,	2, 0, 1,	4,  3, 0)\
-	RCT(_00X_X04_3X0,	OCH_B,		OCH_RB,		OCH_C3X0,	2, 0, 1,	4,  0, 3)\
-	RCT(_00X_0X4_X30,	OCH_B,		OCH_GB,		OCH_CX30,	2, 1, 0,	4,  0, 3)\
-	RCT(_X00_4X0_30X,	OCH_R,		OCH_GR,		OCH_C30X,	0, 1, 2,	4,  3, 0)\
-	RCT(_X00_4X0_03X,	OCH_R,		OCH_GR,		OCH_C03X,	0, 1, 2,	4,  0, 3)\
-	RCT(_X00_40X_0X3,	OCH_R,		OCH_BR,		OCH_C0X3,	0, 2, 1,	4,  0, 3)\
-\
-	RCT(_0X0_03X_X30,	OCH_G,		OCH_C03X,	OCH_CX30,	1, 2, 0,	3,  3, 0)\
-	RCT(_0X0_03X_X03,	OCH_G,		OCH_C03X,	OCH_CX03,	1, 2, 0,	3,  0, 3)\
-	RCT(_0X0_X30_30X,	OCH_G,		OCH_CX30,	OCH_C30X,	1, 0, 2,	3,  0, 3)\
-	RCT(_00X_X03_0X3,	OCH_B,		OCH_CX03,	OCH_C0X3,	2, 0, 1,	3,  3, 0)\
-	RCT(_00X_X03_3X0,	OCH_B,		OCH_CX03,	OCH_C3X0,	2, 0, 1,	3,  0, 3)\
-	RCT(_00X_0X3_X30,	OCH_B,		OCH_C0X3,	OCH_CX30,	2, 1, 0,	3,  0, 3)\
-	RCT(_X00_3X0_30X,	OCH_R,		OCH_C3X0,	OCH_C30X,	0, 1, 2,	3,  3, 0)\
-	RCT(_X00_3X0_03X,	OCH_R,		OCH_C3X0,	OCH_C03X,	0, 1, 2,	3,  0, 3)\
-	RCT(_X00_30X_0X3,	OCH_R,		OCH_C30X,	OCH_C0X3,	0, 2, 1,	3,  0, 3)\
-\
-	RCT(_X00_0X0_13X,	OCH_R,		OCH_G,		OCH_B1,		0, 1, 2,	0,  1, 3)\
-	RCT(_X00_4X0_13X,	OCH_R,		OCH_GR,		OCH_B1,		0, 1, 2,	4,  1, 3)\
-	RCT(_X00_00X_3X1,	OCH_R,		OCH_B,		OCH_G1,		0, 2, 1,	0,  3, 1)\
-	RCT(_X00_40X_3X1,	OCH_R,		OCH_BR,		OCH_G1,		0, 2, 1,	4,  3, 1)\
-	RCT(_0X0_00X_X13,	OCH_G,		OCH_B,		OCH_R1,		1, 2, 0,	0,  1, 3)\
-	RCT(_0X0_04X_X13,	OCH_G,		OCH_BG,		OCH_R1,		1, 2, 0,	4,  1, 3)\
-	RCT(_0X0_X40_13X,	OCH_G,		OCH_RG,		OCH_B1,		1, 0, 2,	4,  3, 1)\
-	RCT(_00X_X04_3X1,	OCH_B,		OCH_RB,		OCH_G1,		2, 0, 1,	4,  1, 3)\
-	RCT(_00X_04X_X13,	OCH_B,		OCH_GB,		OCH_R1,		2, 1, 0,	4,  3, 1)\
-	RCT(_X00_0X0_22X,	OCH_R,		OCH_G,		OCH_B2,		0, 1, 2,	0,  2, 2)\
-	RCT(_X00_4X0_22X,	OCH_R,		OCH_GR,		OCH_B2,		0, 1, 2,	4,  2, 2)\
-	RCT(_X00_00X_2X2,	OCH_R,		OCH_B,		OCH_G2,		0, 2, 1,	0,  2, 2)\
-	RCT(_X00_40X_2X2,	OCH_R,		OCH_BR,		OCH_G2,		0, 2, 1,	4,  2, 2)\
-	RCT(_0X0_00X_X22,	OCH_G,		OCH_B,		OCH_R2,		1, 2, 0,	0,  2, 2)\
-	RCT(_0X0_04X_X22,	OCH_G,		OCH_BG,		OCH_R2,		1, 2, 0,	4,  2, 2)\
-	RCT(_0X0_X40_22X,	OCH_G,		OCH_RG,		OCH_B2,		1, 0, 2,	4,  2, 2)\
-	RCT(_00X_X04_2X2,	OCH_B,		OCH_RB,		OCH_G2,		2, 0, 1,	4,  2, 2)\
-	RCT(_00X_0X4_X22,	OCH_B,		OCH_GB,		OCH_R2,		2, 1, 0,	4,  2, 2)\
-	RCT(_X00_0X0_31X,	OCH_R,		OCH_G,		OCH_B3,		0, 1, 2,	0,  3, 1)\
-	RCT(_X00_4X0_31X,	OCH_R,		OCH_GR,		OCH_B3,		0, 1, 2,	4,  3, 1)\
-	RCT(_X00_00X_1X3,	OCH_R,		OCH_B,		OCH_G3,		0, 2, 1,	0,  1, 3)\
-	RCT(_X00_40X_1X3,	OCH_R,		OCH_BR,		OCH_G3,		0, 2, 1,	4,  1, 3)\
-	RCT(_0X0_00X_X31,	OCH_G,		OCH_B,		OCH_R3,		1, 2, 0,	0,  3, 1)\
-	RCT(_0X0_04X_X31,	OCH_G,		OCH_BG,		OCH_R3,		1, 2, 0,	4,  3, 1)\
-	RCT(_0X0_X40_31X,	OCH_G,		OCH_RG,		OCH_B3,		1, 0, 2,	4,  1, 3)\
-	RCT(_00X_X04_1X3,	OCH_B,		OCH_RB,		OCH_G3,		2, 0, 1,	4,  3, 1)\
-	RCT(_00X_0X4_X31,	OCH_B,		OCH_GB,		OCH_R3,		2, 1, 0,	4,  1, 3)\
-\
-	RCT(_X00_3X0_13X,	OCH_R,		OCH_C3X0,	OCH_B1,		0, 1, 2,	3,  1, 3)\
-	RCT(_X00_30X_3X1,	OCH_R,		OCH_C30X,	OCH_G1,		0, 2, 1,	3,  3, 1)\
-	RCT(_0X0_03X_X13,	OCH_G,		OCH_C03X,	OCH_R1,		1, 2, 0,	3,  1, 3)\
-	RCT(_0X0_X30_13X,	OCH_G,		OCH_CX30,	OCH_B1,		1, 0, 2,	3,  3, 1)\
-	RCT(_00X_X03_3X1,	OCH_B,		OCH_CX03,	OCH_G1,		2, 0, 1,	3,  1, 3)\
-	RCT(_00X_03X_X13,	OCH_B,		OCH_C03X,	OCH_R1,		2, 1, 0,	3,  3, 1)\
-	RCT(_X00_3X0_22X,	OCH_R,		OCH_C3X0,	OCH_B2,		0, 1, 2,	3,  2, 2)\
-	RCT(_X00_30X_2X2,	OCH_R,		OCH_C30X,	OCH_G2,		0, 2, 1,	3,  2, 2)\
-	RCT(_0X0_03X_X22,	OCH_G,		OCH_C03X,	OCH_R2,		1, 2, 0,	3,  2, 2)\
-	RCT(_0X0_X30_22X,	OCH_G,		OCH_CX30,	OCH_B2,		1, 0, 2,	3,  2, 2)\
-	RCT(_00X_X03_2X2,	OCH_B,		OCH_CX03,	OCH_G2,		2, 0, 1,	3,  2, 2)\
-	RCT(_00X_0X3_X22,	OCH_B,		OCH_C0X3,	OCH_R2,		2, 1, 0,	3,  2, 2)\
-	RCT(_X00_3X0_31X,	OCH_R,		OCH_C3X0,	OCH_B3,		0, 1, 2,	3,  3, 1)\
-	RCT(_X00_30X_1X3,	OCH_R,		OCH_C30X,	OCH_G3,		0, 2, 1,	3,  1, 3)\
-	RCT(_0X0_03X_X31,	OCH_G,		OCH_C03X,	OCH_R3,		1, 2, 0,	3,  3, 1)\
-	RCT(_0X0_X30_31X,	OCH_G,		OCH_CX30,	OCH_B3,		1, 0, 2,	3,  1, 3)\
-	RCT(_00X_X03_1X3,	OCH_B,		OCH_CX03,	OCH_G3,		2, 0, 1,	3,  3, 1)\
-	RCT(_00X_0X3_X31,	OCH_B,		OCH_C0X3,	OCH_R3,		2, 1, 0,	3,  1, 3)\
-
-#if 0
-	RCT(_211_4X0_40X,	OCH_Y211,	OCH_C4X0,	OCH_C40X,	0, 1, 2,	4,  4, 0,	1, 1, 0, 0)\
-	RCT(_211_4X0_31X,	OCH_Y211,	OCH_C4X0,	OCH_C31X,	0, 1, 2,	4,  4, 0,	1, 1, 0, 1)\
-	RCT(_211_3X1_40X,	OCH_Y211,	OCH_C3X1,	OCH_C40X,	0, 1, 2,	4,  4, 0,	1, 1, 1, 0)\
-	RCT(_310_4X0_40X,	OCH_Y310,	OCH_C4X0,	OCH_C40X,	0, 1, 2,	4,  4, 0,	1, 0, 0, 0)\
-	RCT(_310_4X0_31X,	OCH_Y310,	OCH_C4X0,	OCH_C31X,	0, 1, 2,	4,  4, 0,	1, 0, 0, 1)\
-	RCT(_310_3X1_40X,	OCH_Y310,	OCH_C3X1,	OCH_C40X,	0, 1, 2,	4,  4, 0,	1, 0, 1, 0)\
-	RCT(_301_4X0_40X,	OCH_Y301,	OCH_C4X0,	OCH_C40X,	0, 1, 2,	4,  4, 0,	0, 1, 0, 0)\
-	RCT(_301_4X0_31X,	OCH_Y301,	OCH_C4X0,	OCH_C31X,	0, 1, 2,	4,  4, 0,	0, 1, 0, 1)\
-	RCT(_301_3X1_40X,	OCH_Y301,	OCH_C3X1,	OCH_C40X,	0, 1, 2,	4,  4, 0,	0, 1, 1, 0)\
-	RCT(_121_04X_X40,	OCH_Y121,	OCH_C04X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	1, 1, 0, 0)\
-	RCT(_121_04X_X31,	OCH_Y121,	OCH_C04X,	OCH_CX31,	1, 2, 0,	4,  4, 0,	1, 1, 0, 1)\
-	RCT(_121_13X_X40,	OCH_Y121,	OCH_C13X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	1, 1, 1, 0)\
-	RCT(_031_04X_X40,	OCH_Y031,	OCH_C04X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	0, 1, 0, 0)\
-	RCT(_031_04X_X31,	OCH_Y031,	OCH_C04X,	OCH_CX31,	1, 2, 0,	4,  4, 0,	0, 1, 0, 1)\
-	RCT(_031_13X_X40,	OCH_Y031,	OCH_C13X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	0, 1, 1, 0)\
-	RCT(_130_40X_X40,	OCH_Y130,	OCH_C04X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	1, 0, 0, 0)\
-	RCT(_130_40X_X31,	OCH_Y130,	OCH_C04X,	OCH_CX31,	1, 2, 0,	4,  4, 0,	1, 0, 0, 1)\
-	RCT(_130_31X_X40,	OCH_Y130,	OCH_C13X,	OCH_CX40,	1, 2, 0,	4,  4, 0,	1, 0, 1, 0)\
-	RCT(_112_X04_0X4,	OCH_Y112,	OCH_CX04,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	1, 1, 0, 0)\
-	RCT(_112_X04_1X3,	OCH_Y112,	OCH_CX04,	OCH_C1X3,	2, 0, 1,	4,  4, 0,	1, 1, 0, 1)\
-	RCT(_112_X13_0X4,	OCH_Y112,	OCH_CX13,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	1, 1, 1, 0)\
-	RCT(_013_X04_0X4,	OCH_Y013,	OCH_CX04,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	0, 1, 0, 0)\
-	RCT(_013_X04_1X3,	OCH_Y013,	OCH_CX04,	OCH_C1X3,	2, 0, 1,	4,  4, 0,	0, 1, 0, 1)\
-	RCT(_013_X13_0X4,	OCH_Y013,	OCH_CX13,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	0, 1, 1, 0)\
-	RCT(_103_X40_0X4,	OCH_Y103,	OCH_CX04,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	1, 0, 0, 0)\
-	RCT(_103_X40_1X3,	OCH_Y103,	OCH_CX04,	OCH_C1X3,	2, 0, 1,	4,  4, 0,	1, 0, 0, 1)\
-	RCT(_103_X31_0X4,	OCH_Y103,	OCH_CX13,	OCH_C0X4,	2, 0, 1,	4,  4, 0,	1, 0, 1, 0)
-#endif
-#endif
-typedef enum _RCTIndex
-{
-#define RCT(LABEL, ...) RCT_##LABEL,
-	RCTLIST
-#undef  RCT
-	RCT_COUNT,
-} RCTIndex;
-static const uint8_t rct_combinations[RCT_COUNT][II_COUNT]=
-{
-#define RCT(LABEL, ...) {__VA_ARGS__},
-	RCTLIST
-#undef  RCT
-};
-static const char *rct_names[RCT_COUNT]=
-{
-#define RCT(LABEL, ...) #LABEL,
-	RCTLIST
-#undef  RCT
-};
 #endif
 
 //ANS validation
@@ -969,8 +718,58 @@ static void ansval_check(const void *data, int esize, int count)
 #define ansval_check(...)
 #endif
 
-//LIFO Bypass Coder
-#if 1
+//LIFO Bitpacker, inspired by FastPrefixCoder	https://github.com/kagiannis/FPC
+typedef struct _BitPackerLIFO
+{
+	int64_t bitidx;
+	uint64_t cache;
+	uint8_t *start, *ptr, *end;//bwd enc / fwd dec
+} BitPackerLIFO;
+INLINE void bitpacker_enc_init(BitPackerLIFO *ec, uint8_t *start, uint8_t *end)
+{
+	ec->bitidx=0;
+	ec->cache=0;
+	ec->start=start;
+	ec->ptr=end-sizeof(uint64_t);
+	ec->end=end;
+	*(uint64_t*)start=0;
+}
+INLINE void bitpacker_enc(BitPackerLIFO *ec, int64_t bitcount, uint64_t sym)
+{
+	ansval_push(&sym, sizeof(sym), 1);
+	ec->bitidx+=bitcount;
+	ec->cache|=sym<<(64-ec->bitidx);
+	*(uint64_t*)ec->ptr=ec->cache;
+	ec->cache<<=ec->bitidx&56;
+	ec->ptr-=ec->bitidx>>3;
+	ec->bitidx&=7;
+}
+INLINE uint8_t* bitpacker_enc_flush(BitPackerLIFO *ec)
+{
+	bitpacker_enc(ec, 1, 1);
+	ec->ptr+=7;
+	return ec->ptr;
+}
+INLINE uint64_t bitpacker_dec(BitPackerLIFO *ec, int64_t bitcount)
+{
+	uint64_t sym;
+
+	sym=*(uint64_t*)ec->ptr>>ec->bitidx&((1ULL<<bitcount)-1);//shift-out decoded bits
+	ansval_check(&sym, sizeof(sym), 1);
+	ec->bitidx+=bitcount;
+	ec->ptr+=ec->bitidx>>3;//skip decoded bytes
+	ec->bitidx&=7;
+	return sym;
+}
+INLINE void bitpacker_dec_init(BitPackerLIFO *ec, uint8_t *start, uint8_t *end)
+{
+	ec->start=start;
+	ec->ptr=start;
+	ec->end=end;
+	ec->bitidx=TZCNT64(*(uint64_t*)ec->ptr);
+	bitpacker_dec(ec, 1);
+}
+#if 0
 #define BITPACKERMAX 32
 typedef struct _BitPackerLIFO//bwd enc / fwd dec
 {
@@ -1357,11 +1156,11 @@ static void dec_unpackhist(BitPackerLIFO *ec, uint32_t *CDF2sym, uint64_t bypass
 			bit=0;
 			do
 			{
-				bit=bitpacker_dec(ec, 1);
+				bit=(int)bitpacker_dec(ec, 1);
 				++freq;
 			}while(!bit);
 			if(nbypass)
-				freq=freq<<nbypass|bitpacker_dec(ec, nbypass);
+				freq=freq<<nbypass|(int)bitpacker_dec(ec, nbypass);
 #ifdef ANS_VAL
 			ansval_check(&freq, sizeof(freq), 1);
 #endif
@@ -1478,48 +1277,6 @@ static void decorr1d(uint8_t *data, int count, int bytestride, RCTInfo *rct, int
 		ptr+=bytestride;
 	}
 }
-#if 0
-static void decorr1d_deprecated(uint8_t *data, int count, int bytestride, int bestrct, int *rhist)
-{
-	const uint8_t *combination=rct_combinations[bestrct];
-	int yidx=combination[II_PERM_Y];
-	int uidx=combination[II_PERM_U];
-	int vidx=combination[II_PERM_V];
-	int ufromy=-(combination[II_COEFF_U_SUB_Y]!=0);
-	int vc0=combination[II_COEFF_V_SUB_Y];
-	int vc1=combination[II_COEFF_V_SUB_U];
-
-	uint8_t *ptr=data;
-	int prevy=0, prevu=0, prevv=0, offset=0;
-	int k, vpred;
-	for(k=0;k<count;++k)
-	{
-		int y=ptr[yidx]-128;
-		int u=ptr[uidx]-128;
-		int v=ptr[vidx]-128;
-		int sym;
-
-		ptr[0]=sym=(uint8_t)(y-prevy+128);
-		++rhist[256*0+sym];
-		prevy=y;
-
-		offset=y&ufromy;
-		prevu+=offset;
-		CLAMP2(prevu, -128, 127);
-		ptr[1]=sym=(uint8_t)(u-prevu+128);
-		++rhist[256*1+sym];
-		prevu=u-offset;
-
-		offset=vc0*y+vc1*u;
-		vpred=(prevv+offset)>>2;
-		CLAMP2(vpred, -128, 127);
-		ptr[2]=sym=(uint8_t)(v-vpred+128);
-		++rhist[256*2+sym];
-		prevv=4*v-offset;
-		ptr+=bytestride;
-	}
-}
-#endif
 static void encode1d_port(uint8_t *data, int count, int bytestride, unsigned *pstate, uint8_t **pstreamptr, const uint8_t *streamend, const rANS_SIMD_SymInfo *rsyminfo)
 {
 	uint8_t *streamptr=*pstreamptr;
@@ -1804,96 +1561,6 @@ static void decode1d(uint8_t *data, int count, int bytestride, RCTInfo *rct, uns
 	(void)streamend;
 #endif
 }
-#if 0
-static void decode1d_deprecated(uint8_t *data, int count, int bytestride, int bestrct, unsigned *pstate, const uint8_t **pstreamptr, const uint8_t *streamend, unsigned *rCDF2syms)
-{
-	const uint8_t *combination=rct_combinations[bestrct];
-	int yidx=combination[II_PERM_Y];
-	int uidx=combination[II_PERM_U];
-	int vidx=combination[II_PERM_V];
-	int ufromy=-(combination[II_COEFF_U_SUB_Y]!=0);
-	int vc0=combination[II_COEFF_V_SUB_Y];
-	int vc1=combination[II_COEFF_V_SUB_U];
-
-	const uint8_t *streamptr=*pstreamptr;
-	unsigned state=*pstate;
-	uint8_t *ptr=data;
-	int prevy=0, prevu=0, prevv=0, offset=0;
-	int y=0, u=0, v=0;
-	int k, vpred;
-	for(k=0;k<count;++k)
-	{
-		unsigned info;
-
-		//yuv = (int8_t)(error+N-128)
-		info=rCDF2syms[0<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		y=(int8_t)(info+prevy-128);
-		prevy=y;
-#ifdef ANS_VAL
-		ansval_check(&state, sizeof(state), 1);
-#endif
-		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
-		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
-		{
-#ifdef _DEBUG
-			if(streamptr>streamend)
-				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
-#endif
-			state=state<<16|*(uint16_t*)streamptr;
-			streamptr+=2;
-		}
-
-		offset=y&ufromy;
-		prevu+=offset;
-		CLAMP2(prevu, -128, 127);
-		info=rCDF2syms[1<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		u=(int8_t)(info+prevu-128);
-		prevu=u-offset;
-#ifdef ANS_VAL
-		ansval_check(&state, sizeof(state), 1);
-#endif
-		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
-		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
-		{
-#ifdef _DEBUG
-			if(streamptr>streamend)
-				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
-#endif
-			state=state<<16|*(uint16_t*)streamptr;
-			streamptr+=2;
-		}
-
-		offset=vc0*y+vc1*u;
-		vpred=(prevv+offset)>>2;
-		CLAMP2(vpred, -128, 127);
-		info=rCDF2syms[2<<PROBBITS|(state&((1<<PROBBITS)-1))];
-		v=(int8_t)(info+vpred-128);
-		prevv=4*v-offset;
-#ifdef ANS_VAL
-		ansval_check(&state, sizeof(state), 1);
-#endif
-		state=(state>>PROBBITS)*(info>>(PROBBITS+8))+(info<<PROBBITS>>(32-PROBBITS));
-		if(state<(1<<(RANS_STATE_BITS-RANS_RENORM_BITS)))
-		{
-#ifdef _DEBUG
-			if(streamptr>streamend)
-				CRASH("OOB ptr %016zX >= %016zX", streamptr, streamend);
-#endif
-			state=state<<16|*(uint16_t*)streamptr;
-			streamptr+=2;
-		}
-		ptr[yidx]=y+128;
-		ptr[uidx]=u+128;
-		ptr[vidx]=v+128;
-		ptr+=bytestride;
-	}
-	*pstreamptr=streamptr;
-	*pstate=state;
-#ifndef _DEBUG
-	(void)streamend;
-#endif
-}
-#endif
 #endif//COMMON_rANS
 
 #endif//INC_COMMON_H
